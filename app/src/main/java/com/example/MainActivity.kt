@@ -1,39 +1,65 @@
 package com.example
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
-import com.example.ui.theme.MyApplicationTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.firebase.configureAppCheck
+import com.example.navigation.LTAppNavigation
+import com.example.ui.MainViewModel
+import com.example.ui.theme.LTPlayerTheme
 
 class MainActivity : ComponentActivity() {
-  override fun onCreate(savedInstanceState: Bundle?) {
-    super.onCreate(savedInstanceState)
-    enableEdgeToEdge()
-    setContent {
-      MyApplicationTheme {
-        Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-          Greeting(name = "Android", modifier = Modifier.padding(innerPadding))
+
+    private lateinit var container: LTPlayerContainer
+    private var incomingMediaUri by mutableStateOf<Uri?>(null)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // STEP 1: Initialize Firebase App Check with launch intent before any UI or ViewModels
+        configureAppCheck(this, intent)
+
+        enableEdgeToEdge()
+        container = LTPlayerContainer(applicationContext)
+        incomingMediaUri = extractViewUri(intent)
+
+        setContent {
+            val mainViewModel: MainViewModel = viewModel(
+                factory = MainViewModel.provideFactory(container)
+            )
+            val settings by mainViewModel.settings.collectAsStateWithLifecycle()
+
+            LTPlayerTheme(themeMode = settings.themeMode) {
+                LTAppNavigation(
+                    viewModel = mainViewModel,
+                    incomingViewUri = incomingMediaUri
+                )
+            }
         }
-      }
     }
-  }
-}
 
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-  Text(text = "Hello $name!", modifier = modifier)
-}
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        extractViewUri(intent)?.let { incomingMediaUri = it }
+    }
 
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-  MyApplicationTheme { Greeting("Android") }
+    override fun onDestroy() {
+        if (::container.isInitialized) {
+            container.playerController.release()
+        }
+        super.onDestroy()
+    }
+
+    private fun extractViewUri(intent: Intent?): Uri? {
+        return if (intent?.action == Intent.ACTION_VIEW) intent.data else null
+    }
 }

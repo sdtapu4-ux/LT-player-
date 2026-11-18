@@ -1,3 +1,18 @@
 <resources>
     <string name="app_name">LT PLAYER</string>
+    <string name="app_short_name">LT</string>
+    <string name="tagline">ULTIMATE MEDIA ENGINE</string>
+    <string name="nav_video">VIDEO</string>
+    <string name="nav_music">MUSIC</string>
+    <string name="nav_ai_video">AI VIDEO</string>
+    <string name="nav_game">GAME</string>
+    <string name="nav_me">ME</string>
+    <string name="permission_title">Access Your Local Media</string>
+    <string name="permission_subtitle">Allow LT PLAYER to scan your device for videos and music, or open files directly via Android picker.</string>
+    <string name="grant_permission">Grant Media Access</string>
+    <string name="pick_file_saf">Open via Picker</string>
+    <string name="no_videos_found">No Local Videos Found</string>
+    <string name="no_music_found">No Local Music Found</string>
+    <string name="ai_workspace_title">AI Video Workspace</string>
+    <string name="premium_title">LT PLAYER Ultimate</string>
 </resources>

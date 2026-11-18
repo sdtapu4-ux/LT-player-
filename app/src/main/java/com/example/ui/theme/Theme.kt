@@ -1,52 +1,92 @@
 package com.example.ui.theme
 
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import com.example.data.model.ThemeMode
 
-private val DarkColorScheme =
-  darkColorScheme(primary = Purple80, secondary = PurpleGrey80, tertiary = Pink80)
+private val LTDarkColorScheme = darkColorScheme(
+    primary = ElectricGreen,
+    onPrimary = OnElectricGreen,
+    primaryContainer = ElectricGreenContainer,
+    onPrimaryContainer = ElectricGreen,
+    secondary = PremiumBlue,
+    onSecondary = OnPremiumBlue,
+    secondaryContainer = PremiumBlueContainer,
+    onSecondaryContainer = PremiumBlueLight,
+    tertiary = AmberGold,
+    background = DeepBlack,
+    onBackground = TextPrimaryDark,
+    surface = DarkCharcoal,
+    onSurface = TextPrimaryDark,
+    surfaceVariant = ElevatedCharcoal,
+    onSurfaceVariant = TextSecondaryDark,
+    surfaceContainerLowest = DeepBlack,
+    surfaceContainerLow = DarkCharcoal,
+    surfaceContainer = ElevatedCharcoal,
+    surfaceContainerHigh = CardCharcoal,
+    outline = SubtleBorderDark,
+    outlineVariant = SubtleBorderDark.copy(alpha = 0.6f),
+    error = CoralError,
+    onError = DeepBlack,
+    errorContainer = CoralErrorContainer,
+    onErrorContainer = CoralError
+)
 
-private val LightColorScheme =
-  lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40,
+private val LTLightColorScheme = lightColorScheme(
+    primary = ElectricGreenLightMode,
+    onPrimary = LightSurface,
+    primaryContainer = ElectricGreenContainerLight,
+    onPrimaryContainer = OnElectricGreen,
+    secondary = PremiumBlueLightMode,
+    onSecondary = LightSurface,
+    secondaryContainer = PremiumBlueContainerLight,
+    onSecondaryContainer = PremiumBlueLightMode,
+    tertiary = AmberGold,
+    background = LightBackground,
+    onBackground = TextPrimaryLight,
+    surface = LightSurface,
+    onSurface = TextPrimaryLight,
+    surfaceVariant = LightSurfaceVariant,
+    onSurfaceVariant = TextSecondaryLight,
+    surfaceContainerLowest = LightSurface,
+    surfaceContainerLow = LightBackground,
+    surfaceContainer = LightSurface,
+    surfaceContainerHigh = LightSurfaceVariant,
+    outline = LightBorder,
+    outlineVariant = LightBorder.copy(alpha = 0.6f),
+    error = CoralError,
+    onError = LightSurface
+)
 
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
-  )
+val LTPlayerShapes = Shapes(
+    extraSmall = RoundedCornerShape(6.dp),
+    small = RoundedCornerShape(10.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(22.dp),
+    extraLarge = RoundedCornerShape(28.dp)
+)
 
 @Composable
-fun MyApplicationTheme(
-  darkTheme: Boolean = isSystemInDarkTheme(),
-  // Dynamic color is available on Android 12+
-  dynamicColor: Boolean = true,
-  content: @Composable () -> Unit,
+fun LTPlayerTheme(
+    themeMode: ThemeMode = ThemeMode.DARK,
+    content: @Composable () -> Unit
 ) {
-  val colorScheme =
-    when {
-      dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-        val context = LocalContext.current
-        if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-      }
-
-      darkTheme -> DarkColorScheme
-      else -> LightColorScheme
+    val useDark = when (themeMode) {
+        ThemeMode.DARK -> true
+        ThemeMode.LIGHT -> false
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
     }
 
-  MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)
+    MaterialTheme(
+        colorScheme = if (useDark) LTDarkColorScheme else LTLightColorScheme,
+        typography = LTPlayerTypography,
+        shapes = LTPlayerShapes,
+        content = content
+    )
 }
