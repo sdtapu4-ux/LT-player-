@@ -55,17 +55,24 @@ jobs:
           if-no-files-found: error
 
       - name: Build Release APK & AAB (when signing secrets are configured)
-        if: ${{ secrets.KEYSTORE_BASE64 != '' && secrets.STORE_PASSWORD != '' && secrets.KEY_PASSWORD != '' }}
+        id: release_build
         env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PATH: ${{ github.workspace }}/release-keystore.jks
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$KEYSTORE_PATH"
-          gradle :app:assembleRelease :app:bundleRelease --no-daemon
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
+            gradle :app:assembleRelease :app:bundleRelease --no-daemon
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release signing secrets not set; skipping release APK/AAB."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Upload Release APK & AAB Artifacts
-        if: ${{ secrets.KEYSTORE_BASE64 != '' && secrets.STORE_PASSWORD != '' && secrets.KEY_PASSWORD != '' }}
+        if: steps.release_build.outputs.ready == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: LT-PLAYER-release-outputs

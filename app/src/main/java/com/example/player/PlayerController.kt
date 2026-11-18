@@ -105,7 +105,6 @@ class PlayerController(
         get() = controller
 
     init {
-        connect()
         observeAudioSessionForEqualizer()
     }
 
@@ -409,8 +408,12 @@ class PlayerController(
     }
 
     fun togglePlayPause() {
-        controller?.let {
-            if (it.isPlaying) it.pause() else it.play()
+        val mc = controller
+        if (mc != null) {
+            if (mc.isPlaying) mc.pause() else mc.play()
+        } else if (_state.value.currentEntry != null) {
+            pendingAction = { controller?.play() }
+            connect()
         }
     }
 

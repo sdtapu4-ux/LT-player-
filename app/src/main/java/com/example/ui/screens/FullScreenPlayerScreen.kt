@@ -208,7 +208,10 @@ fun FullScreenPlayerScreen(
                 }
             },
             update = { view ->
-                view.player = playerController.playerOrNull
+                val activePlayer = if (playerState.isConnected) playerController.playerOrNull else null
+                if (view.player !== activePlayer) {
+                    view.player = activePlayer
+                }
                 view.resizeMode = resizeMode
                 view.subtitleView?.visibility =
                     if (settings.subtitlePrefs.enabled && playerState.externalSubtitleCues.isEmpty()) {
