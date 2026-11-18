@@ -1,0 +1,6 @@
+{
+  "name": "LT PLAYER",
+  "description": "LT PLAYER — Professional Android Video & Music Player powered by Media3 ExoPlayer, Room, and AI Video Workspace",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
