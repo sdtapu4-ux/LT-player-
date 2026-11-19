@@ -136,6 +136,62 @@ data class AudioTrackOption(
     val isSelected: Boolean
 )
 
+enum class PlaybackEnginePreference(val label: String, val description: String) {
+    AUTO("Auto Engine", "Media3 primary with automatic LibVLC fallback"),
+    MEDIA3("Media3 ExoPlayer", "AndroidX Media3 hardware-accelerated engine"),
+    VLC("LibVLC Engine", "VideoLAN universal container & codec engine")
+}
+
+enum class ActivePlaybackEngine(val label: String) {
+    NONE("Idle"),
+    MEDIA3("Media3"),
+    VLC("LibVLC")
+}
+
+enum class DecoderPreference(val label: String, val description: String) {
+    AUTO("Automatic", "Hardware decoding with automatic software fallback"),
+    HARDWARE("Hardware (HW)", "Force MediaCodec / device hardware acceleration"),
+    SOFTWARE("Software (SW)", "Software decoders (higher CPU & battery usage)")
+}
+
+enum class ActiveDecoderMode(val label: String) {
+    UNKNOWN("Auto"),
+    HARDWARE("HW"),
+    SOFTWARE("SW")
+}
+
+enum class MediaFailureCause(val title: String) {
+    UNSUPPORTED_CONTAINER("Unsupported Container Format"),
+    UNSUPPORTED_VIDEO_CODEC("Unsupported Video Codec"),
+    UNSUPPORTED_AUDIO_CODEC("Unsupported Audio Codec"),
+    DECODER_INIT_FAILURE("Decoder Initialization Failed"),
+    CORRUPTED_FILE("Corrupted or Truncated Media File"),
+    PERMISSION_MISSING("Permission or File Access Denied"),
+    DRM_PROTECTED("DRM-Protected Content"),
+    INSUFFICIENT_RESOURCES("Insufficient Memory or Decoder Resources"),
+    UNREADABLE_SOURCE("Unreadable or Missing Media Source")
+}
+
+data class PlaybackDiagnosticReport(
+    val cause: MediaFailureCause,
+    val container: String,
+    val videoCodec: String?,
+    val audioCodec: String?,
+    val attemptedEngines: List<ActivePlaybackEngine>,
+    val decoderPreference: DecoderPreference,
+    val technicalSummary: String,
+    val userMessage: String,
+    val recoveryActions: List<String>
+)
+
+data class DecoderCapabilityItem(
+    val label: String,
+    val mimeType: String,
+    val hardwareSupported: Boolean,
+    val softwareSupported: Boolean,
+    val vlcSupported: Boolean
+)
+
 data class SubtitlePreferences(
     val enabled: Boolean = true,
     val fontSizeSp: Float = 18f,
@@ -162,7 +218,12 @@ data class AppSettings(
     val notificationsEnabled: Boolean = true,
     val privacyHideRecentThumbs: Boolean = false,
     val onboardingCompleted: Boolean = false,
-    val subtitlePrefs: SubtitlePreferences = SubtitlePreferences()
+    val subtitlePrefs: SubtitlePreferences = SubtitlePreferences(),
+    val enginePreference: PlaybackEnginePreference = PlaybackEnginePreference.AUTO,
+    val decoderPreference: DecoderPreference = DecoderPreference.AUTO,
+    val preferredAudioLanguage: String = "und",
+    val audioDelayMs: Long = 0L,
+    val audioBoostPercent: Int = 100
 )
 
 data class PlaylistSummary(
@@ -224,5 +285,10 @@ data class CodecSupportReport(
     val audioCodec: String?,
     val isVideoSupported: Boolean,
     val isAudioSupported: Boolean,
-    val message: String
+    val message: String,
+    val detectedByHeader: Boolean = false,
+    val hasHardwareDecoder: Boolean = true,
+    val hasSoftwareDecoder: Boolean = true,
+    val isDrmProtected: Boolean = false,
+    val vlcCanHandle: Boolean = true
 )

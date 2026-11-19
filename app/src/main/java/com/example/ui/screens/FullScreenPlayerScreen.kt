@@ -41,18 +41,23 @@ import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.AspectRatio
 import androidx.compose.material.icons.rounded.Audiotrack
+import androidx.compose.material.icons.rounded.AutoMode
 import androidx.compose.material.icons.rounded.BrightnessHigh
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
+import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Replay10
 import androidx.compose.material.icons.rounded.ScreenRotation
+import androidx.compose.material.icons.rounded.SettingsInputComponent
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Speed
@@ -60,14 +65,18 @@ import androidx.compose.material.icons.rounded.Subtitles
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -94,17 +103,22 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.example.data.model.ActivePlaybackEngine
 import com.example.data.model.AppSettings
 import com.example.data.model.AspectRatioMode
+import com.example.data.model.DecoderPreference
+import com.example.data.model.PlaybackEnginePreference
 import com.example.data.model.SubtitlePreferences
 import com.example.data.scanner.SubtitleParser
 import com.example.player.PlayerController
 import com.example.player.PlayerUiState
+import com.example.ui.theme.AmberGold
 import com.example.ui.theme.CoralError
 import com.example.ui.theme.ElectricGreen
 import com.example.ui.theme.PremiumBlue
 import com.example.utils.FormatUtils
 import kotlinx.coroutines.delay
+import org.videolan.libvlc.util.VLCVideoLayout
 
 @OptIn(UnstableApi::class)
 @kotlin.OptIn(ExperimentalMaterial3Api::class)
@@ -116,7 +130,9 @@ fun FullScreenPlayerScreen(
     onBack: () -> Unit,
     onPickExternalSubtitle: () -> Unit,
     onUpdateSubtitlePrefs: (SubtitlePreferences) -> Unit,
-    onToggleBackgroundAudio: (Boolean) -> Unit
+    onToggleBackgroundAudio: (Boolean) -> Unit,
+    onPersistCompatibility: (PlaybackEnginePreference?, DecoderPreference?, Long?, Int?) -> Unit,
+    onOpenCompatibilitySettings: () -> Unit
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -128,6 +144,7 @@ fun FullScreenPlayerScreen(
     var showSubtitleSheet by remember { mutableStateOf(false) }
     var showAudioTrackSheet by remember { mutableStateOf(false) }
     var showQueueSheet by remember { mutableStateOf(false) }
+    var showEngineSheet by remember { mutableStateOf(false) }
     var isLandscape by remember { mutableStateOf(false) }
     var zoomScale by remember { mutableFloatStateOf(1f) }
     var gestureHudText by remember { mutableStateOf<String?>(null) }
@@ -199,34 +216,61 @@ fun FullScreenPlayerScreen(
         val totalWidthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
         val totalHeightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
 
-        // Video Surface
-        AndroidView(
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    useController = false
-                    setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+        // Video Surface: Media3 PlayerView OR LibVLC VLCVideoLayout
+        if (playerState.activeEngine == ActivePlaybackEngine.VLC) {
+            var vlcLayoutRef by remember { mutableStateOf<VLCVideoLayout?>(null) }
+            DisposableEffect(Unit) {
+                onDispose {
+                    playerController.detachVlcLayout(vlcLayoutRef)
                 }
-            },
-            update = { view ->
-                val activePlayer = if (playerState.isConnected) playerController.playerOrNull else null
-                if (view.player !== activePlayer) {
-                    view.player = activePlayer
-                }
-                view.resizeMode = resizeMode
-                view.subtitleView?.visibility =
-                    if (settings.subtitlePrefs.enabled && playerState.externalSubtitleCues.isEmpty()) {
-                        android.view.View.VISIBLE
-                    } else {
-                        android.view.View.GONE
+            }
+            AndroidView(
+                factory = { ctx ->
+                    VLCVideoLayout(ctx).also { layout ->
+                        vlcLayoutRef = layout
+                        playerController.attachVlcLayout(layout)
                     }
-            },
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer(
-                    scaleX = zoomScale,
-                    scaleY = zoomScale
-                )
-        )
+                },
+                update = { layout ->
+                    vlcLayoutRef = layout
+                    playerController.attachVlcLayout(layout)
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer(
+                        scaleX = zoomScale,
+                        scaleY = zoomScale
+                    )
+            )
+        } else {
+            AndroidView(
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        useController = false
+                        setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                    }
+                },
+                update = { view ->
+                    val activePlayer = if (playerState.isConnected) playerController.playerOrNull else null
+                    if (view.player !== activePlayer) {
+                        view.player = activePlayer
+                    }
+                    view.resizeMode = resizeMode
+                    view.subtitleView?.visibility =
+                        if (settings.subtitlePrefs.enabled && playerState.externalSubtitleCues.isEmpty()) {
+                            android.view.View.VISIBLE
+                        } else {
+                            android.view.View.GONE
+                        }
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer(
+                        scaleX = zoomScale,
+                        scaleY = zoomScale
+                    )
+            )
+        }
 
         // Gesture Capture Layer
         Box(
@@ -382,14 +426,47 @@ fun FullScreenPlayerScreen(
             }
         }
 
-        // Codec / File Playback Error Card
-        if (playerState.playbackError != null) {
+        // Engine Auto-Fallback / Switch Notice Banner
+        if (playerState.engineNotice != null && playerState.playbackError == null) {
             Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                shape = RoundedCornerShape(14.dp),
+                color = Color.Black.copy(alpha = 0.82f),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 64.dp, start = 20.dp, end = 20.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(Icons.Rounded.AutoMode, contentDescription = null, tint = ElectricGreen, modifier = Modifier.size(16.dp))
+                    Text(
+                        text = playerState.engineNotice.orEmpty(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    IconButton(
+                        onClick = { playerController.clearEngineNotice() },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Dismiss", tint = Color.White, modifier = Modifier.size(14.dp))
+                    }
+                }
+            }
+        }
+
+        // Diagnostic Playback Error & Recovery Card
+        if (playerState.playbackError != null) {
+            val diag = playerState.diagnosticReport
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.97f),
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .padding(24.dp)
+                    .padding(20.dp)
                     .fillMaxWidth()
             ) {
                 Column(
@@ -404,9 +481,10 @@ fun FullScreenPlayerScreen(
                     )
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        text = "Unsupported Format or Playback Error",
+                        text = diag?.cause?.title ?: "Playback Error",
                         style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
@@ -415,24 +493,82 @@ fun FullScreenPlayerScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
                     )
-                    Spacer(Modifier.height(16.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(
-                            onClick = onBack,
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    if (diag != null) {
+                        Spacer(Modifier.height(10.dp))
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Back to Library")
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(
+                                    text = "Container: ${diag.container} • Video: ${diag.videoCodec ?: "None"} • Audio: ${diag.audioCodec ?: "None"}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ElectricGreen
+                                )
+                                Text(
+                                    text = "Engines tried: ${diag.attemptedEngines.joinToString(" -> ") { it.label }} • Decoder: ${diag.decoderPreference.label}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
-                        if (playerState.queue.size > 1) {
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (playerState.activeEngine != ActivePlaybackEngine.VLC) {
                             Button(
-                                onClick = { playerController.skipNext() },
+                                onClick = {
+                                    onPersistCompatibility(PlaybackEnginePreference.VLC, null, null, null)
+                                    playerController.switchEngineNow(PlaybackEnginePreference.VLC)
+                                },
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = ElectricGreen,
                                     contentColor = Color(0xFF00210E)
-                                )
+                                ),
+                                modifier = Modifier.weight(1f)
                             ) {
-                                Text("Next Video")
+                                Text("Try LibVLC", maxLines = 1)
                             }
+                        }
+                        Button(
+                            onClick = {
+                                onPersistCompatibility(null, DecoderPreference.SOFTWARE, null, null)
+                                playerController.retryCurrentEntry(forceSoftware = true)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = PremiumBlue),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Software Decode", maxLines = 1)
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onOpenCompatibilitySettings,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Compat Settings", maxLines = 1)
+                        }
+                        OutlinedButton(
+                            onClick = onBack,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Back to Library", maxLines = 1)
+                        }
+                    }
+                    if (playerState.queue.size > 1) {
+                        Spacer(Modifier.height(6.dp))
+                        TextButton(onClick = { playerController.skipNext() }) {
+                            Text("Skip to Next Video", color = ElectricGreen)
                         }
                     }
                 }
@@ -500,11 +636,35 @@ fun FullScreenPlayerScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        Text(
-                            text = "${playerState.playbackSpeed}x • ${playerState.aspectRatioMode.label}${if (zoomScale > 1.05f) " • ${String.format("%.1fx", zoomScale)}" else ""}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = ElectricGreen
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = if (playerState.activeEngine == ActivePlaybackEngine.VLC) {
+                                    AmberGold.copy(alpha = 0.22f)
+                                } else {
+                                    ElectricGreen.copy(alpha = 0.2f)
+                                },
+                                modifier = Modifier
+                                    .clickable { showEngineSheet = true }
+                                    .testTag("player_engine_badge")
+                            ) {
+                                Text(
+                                    text = "${playerState.activeEngine.label.uppercase()} • ${playerState.activeDecoderMode.label}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (playerState.activeEngine == ActivePlaybackEngine.VLC) AmberGold else ElectricGreen,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                            Text(
+                                text = "${playerState.playbackSpeed}x • ${playerState.aspectRatioMode.label}${if (zoomScale > 1.05f) " • ${String.format("%.1fx", zoomScale)}" else ""}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.85f)
+                            )
+                        }
                     }
                     IconButton(
                         onClick = { onToggleBackgroundAudio(!settings.backgroundAudioEnabled) },
@@ -719,8 +879,62 @@ fun FullScreenPlayerScreen(
     if (showAudioTrackSheet) {
         ModalBottomSheet(onDismissRequest = { showAudioTrackSheet = false }) {
             Column(modifier = Modifier.padding(20.dp)) {
-                Text("Audio Tracks", style = MaterialTheme.typography.titleLarge)
-                Spacer(Modifier.height(12.dp))
+                Text("Audio Tracks & Boost", style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Volume Boost: ${playerState.audioBoostPercent}%", style = MaterialTheme.typography.titleSmall)
+                    if (playerState.audioBoostPercent > 100) {
+                        TextButton(onClick = {
+                            playerController.setAudioBoostPercent(100)
+                            onPersistCompatibility(null, null, null, 100)
+                        }) { Text("Reset") }
+                    }
+                }
+                Slider(
+                    value = playerState.audioBoostPercent.toFloat(),
+                    onValueChange = {
+                        val v = it.toInt()
+                        playerController.setAudioBoostPercent(v)
+                        onPersistCompatibility(null, null, null, v)
+                    },
+                    valueRange = 100f..200f,
+                    colors = SliderDefaults.colors(thumbColor = ElectricGreen, activeTrackColor = ElectricGreen)
+                )
+                if (playerState.activeEngine == ActivePlaybackEngine.VLC) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            String.format("Audio Sync Delay: %+.2fs", playerState.audioDelayMs / 1000f),
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        if (playerState.audioDelayMs != 0L) {
+                            TextButton(onClick = {
+                                playerController.setAudioDelayMs(0L)
+                                onPersistCompatibility(null, null, 0L, null)
+                            }) { Text("Reset") }
+                        }
+                    }
+                    Slider(
+                        value = playerState.audioDelayMs.toFloat(),
+                        onValueChange = {
+                            val ms = (it / 50f).toInt() * 50L
+                            playerController.setAudioDelayMs(ms)
+                            onPersistCompatibility(null, null, ms, null)
+                        },
+                        valueRange = -5000f..5000f,
+                        colors = SliderDefaults.colors(thumbColor = PremiumBlue, activeTrackColor = PremiumBlue)
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Text("Audio Streams", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(6.dp))
                 if (playerState.audioTracks.isEmpty()) {
                     Text(
                         "Default audio track active.",
@@ -751,6 +965,65 @@ fun FullScreenPlayerScreen(
                                 }
                             }
                         }
+                    }
+                }
+                Spacer(Modifier.height(20.dp))
+            }
+        }
+    }
+
+    if (showEngineSheet) {
+        ModalBottomSheet(onDismissRequest = { showEngineSheet = false }) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Playback Engine & Decoder", style = MaterialTheme.typography.titleLarge)
+                    TextButton(onClick = {
+                        showEngineSheet = false
+                        onOpenCompatibilitySettings()
+                    }) {
+                        Text("All Settings", color = ElectricGreen)
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text("Engine Mode", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PlaybackEnginePreference.entries.forEach { pref ->
+                        FilterChip(
+                            selected = playerState.enginePreference == pref,
+                            onClick = {
+                                onPersistCompatibility(pref, null, null, null)
+                                playerController.switchEngineNow(pref)
+                            },
+                            label = { Text(pref.label) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = ElectricGreen,
+                                selectedLabelColor = Color(0xFF00210E)
+                            )
+                        )
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+                Text("Decoder Mode", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DecoderPreference.entries.forEach { dec ->
+                        FilterChip(
+                            selected = playerState.decoderPreference == dec,
+                            onClick = {
+                                onPersistCompatibility(null, dec, null, null)
+                                playerController.switchDecoderNow(dec)
+                            },
+                            label = { Text(dec.label) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = PremiumBlue,
+                                selectedLabelColor = Color.White
+                            )
+                        )
                     }
                 }
                 Spacer(Modifier.height(20.dp))

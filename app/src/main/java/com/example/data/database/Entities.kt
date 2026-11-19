@@ -102,3 +102,19 @@ data class SafFolderEntity(
     val displayName: String,
     val addedAt: Long
 )
+
+@Entity(tableName = "share_history")
+data class ShareTransferHistoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sessionId: String,
+    val peerDeviceName: String,
+    val direction: String, // SENT or RECEIVED
+    val fileName: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+    val sha256Hex: String,
+    val verified: Boolean,
+    val localUriString: String?,
+    val transportMode: String,
+    val completedAt: Long
+)

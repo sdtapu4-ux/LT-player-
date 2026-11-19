@@ -15,4 +15,8 @@
     <string name="no_music_found">No Local Music Found</string>
     <string name="ai_workspace_title">AI Video Workspace</string>
     <string name="premium_title">LT PLAYER Ultimate</string>
+    <string name="lt_share_title">LT SHARE</string>
+    <string name="lt_share_subtitle">Encrypted QR Pairing, Wi-Fi Direct, Local Wi-Fi &amp; Bluetooth</string>
+    <string name="lt_share_generate_qr">Generate QR Code</string>
+    <string name="lt_share_scan_qr">Scan QR Code</string>
 </resources>

@@ -72,6 +72,8 @@ import androidx.navigation.compose.rememberNavController
 import com.example.data.model.CodecSupportReport
 import com.example.data.model.VideoItem
 import com.example.data.scanner.CodecInspector
+import com.example.share.SharePairingStage
+import com.example.share.ShareRole
 import com.example.ui.MainViewModel
 import com.example.ui.screens.AiVideoWorkspaceScreen
 import com.example.ui.screens.DownloadsScreen
@@ -82,12 +84,24 @@ import com.example.ui.screens.HomeVideoDashboardScreen
 import com.example.ui.screens.MeAndSettingsScreen
 import com.example.ui.screens.MusicPlayerScreen
 import com.example.ui.screens.OnboardingScreen
+import com.example.ui.screens.PlaybackCompatibilitySettingsScreen
 import com.example.ui.screens.PlaylistsScreen
 import com.example.ui.screens.PremiumSubscriptionScreen
 import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.SplashScreen
 import com.example.ui.screens.StorageManagementScreen
+import com.example.ui.screens.share.LtShareConnectedDeviceScreen
+import com.example.ui.screens.share.LtShareGenerateQrScreen
+import com.example.ui.screens.share.LtShareHubScreen
+import com.example.ui.screens.share.LtSharePairingConfirmScreen
+import com.example.ui.screens.share.LtShareQrPreviewScreen
+import com.example.ui.screens.share.LtShareScanQrScreen
+import com.example.ui.screens.share.LtShareTransferProgressScreen
+import com.example.ui.screens.share.LtShareTransferSuccessScreen
 import com.example.ui.theme.ElectricGreen
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 
 @Serializable data object RouteSplash
@@ -104,6 +118,15 @@ import kotlinx.serialization.Serializable
 @Serializable data object RouteDownloads
 @Serializable data object RouteStorage
 @Serializable data object RoutePremium
+@Serializable data object RoutePlaybackCompatibilitySettings
+@Serializable data object RouteLtShare
+@Serializable data object RouteLtShareGenerateQr
+@Serializable data object RouteLtShareQrPreview
+@Serializable data object RouteLtShareScanQr
+@Serializable data object RouteLtSharePairingConfirm
+@Serializable data object RouteLtShareConnected
+@Serializable data object RouteLtShareProgress
+@Serializable data object RouteLtShareSuccess
 
 private data class BottomTabItem(
     val label: String,
@@ -138,9 +161,12 @@ fun LTAppNavigation(
     val billingState by viewModel.billingState.collectAsStateWithLifecycle()
     val aiState by viewModel.aiState.collectAsStateWithLifecycle()
     val statusBanner by viewModel.statusBanner.collectAsStateWithLifecycle()
+    val shareState by viewModel.shareState.collectAsStateWithLifecycle()
 
     var codecInspectReport by remember { mutableStateOf<CodecSupportReport?>(null) }
+    var compatFileInspectReport by remember { mutableStateOf<CodecSupportReport?>(null) }
     var playlistAddTarget by remember { mutableStateOf<VideoItem?>(null) }
+    val uiScope = androidx.compose.runtime.rememberCoroutineScope()
 
     fun checkMediaPermissionsGranted(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -205,6 +231,20 @@ fun LTAppNavigation(
         }
     }
 
+    val safDiagnosticPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            uiScope.launch {
+                val report = withContext(Dispatchers.IO) {
+                    val ext = uri.lastPathSegment?.substringAfterLast('.', "") ?: ""
+                    CodecInspector.inspectUri(context, uri, ext)
+                }
+                compatFileInspectReport = report
+            }
+        }
+    }
+
     LaunchedEffect(statusBanner) {
         statusBanner?.let { msg ->
             snackbarHostState.showSnackbar(msg)
@@ -222,6 +262,41 @@ fun LTAppNavigation(
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
+
+    LaunchedEffect(shareState.stage) {
+        when (shareState.stage) {
+            SharePairingStage.AWAITING_RECEIVER_CONFIRM -> {
+                if (currentDestination?.hasRoute(RouteLtSharePairingConfirm::class) != true) {
+                    navController.navigate(RouteLtSharePairingConfirm) { launchSingleTop = true }
+                }
+            }
+            SharePairingStage.CONNECTED -> {
+                if (currentDestination?.hasRoute(RouteLtShareConnected::class) != true) {
+                    navController.navigate(RouteLtShareConnected) {
+                        popUpTo(RouteLtShare) { inclusive = false }
+                        launchSingleTop = true
+                    }
+                }
+            }
+            SharePairingStage.TRANSFERRING -> {
+                if (currentDestination?.hasRoute(RouteLtShareProgress::class) != true) {
+                    navController.navigate(RouteLtShareProgress) { launchSingleTop = true }
+                }
+            }
+            SharePairingStage.TRANSFER_SUCCESS -> {
+                if (currentDestination?.hasRoute(RouteLtShareSuccess::class) != true) {
+                    navController.navigate(RouteLtShareSuccess) {
+                        popUpTo(RouteLtShareConnected) { inclusive = false }
+                        launchSingleTop = true
+                    }
+                }
+            }
+            SharePairingStage.REJECTED -> {
+                viewModel.showMessage(shareState.errorMessage ?: "Pairing declined.")
+            }
+            else -> Unit
+        }
+    }
 
     val topLevelTabs = remember {
         listOf(
@@ -388,6 +463,10 @@ fun LTAppNavigation(
                                 onOpenStorage = { navController.navigate(RouteStorage) },
                                 onOpenAllFolders = { navController.navigate(RouteFolders) },
                                 onOpenPlaylists = { navController.navigate(RoutePlaylists) },
+                                onOpenLtShare = {
+                                    viewModel.ltShareManager.refreshRadios()
+                                    navController.navigate(RouteLtShare)
+                                },
                                 onInspectCodec = { video ->
                                     codecInspectReport = CodecInspector.inspectUri(
                                         context,
@@ -452,8 +531,40 @@ fun LTAppNavigation(
                                 onOpenStorage = { navController.navigate(RouteStorage) },
                                 onOpenDownloads = { navController.navigate(RouteDownloads) },
                                 onOpenFolders = { navController.navigate(RouteFolders) },
+                                onOpenLtShare = {
+                                    viewModel.ltShareManager.refreshRadios()
+                                    navController.navigate(RouteLtShare)
+                                },
+                                onOpenCompatibility = {
+                                    navController.navigate(RoutePlaybackCompatibilitySettings)
+                                },
                                 onClearHistory = { viewModel.clearHistory() },
                                 onResetSettings = { viewModel.resetSettings() }
+                            )
+                        }
+
+                        composable<RoutePlaybackCompatibilitySettings> {
+                            PlaybackCompatibilitySettingsScreen(
+                                settings = settings,
+                                inspectedFileReport = compatFileInspectReport,
+                                onSelectEngine = { eng ->
+                                    viewModel.updateCompatibilitySettings(enginePreference = eng)
+                                },
+                                onSelectDecoder = { dec ->
+                                    viewModel.updateCompatibilitySettings(decoderPreference = dec)
+                                },
+                                onSelectPreferredAudioLanguage = { lang ->
+                                    viewModel.updateCompatibilitySettings(preferredAudioLanguage = lang)
+                                },
+                                onUpdateAudioDelayMs = { delayMs ->
+                                    viewModel.updateCompatibilitySettings(audioDelayMs = delayMs)
+                                },
+                                onUpdateAudioBoostPercent = { boost ->
+                                    viewModel.updateCompatibilitySettings(audioBoostPercent = boost)
+                                },
+                                onUpdateSubtitlePrefs = { viewModel.updateSubtitlePreferences(it) },
+                                onPickFileToDiagnose = { safDiagnosticPicker.launch(arrayOf("video/*", "*/*")) },
+                                onBack = { navController.popBackStack() }
                             )
                         }
 
@@ -470,6 +581,17 @@ fun LTAppNavigation(
                                 onToggleBackgroundAudio = { enabled ->
                                     viewModel.updatePlayerDefaults(backgroundAudio = enabled)
                                     viewModel.showMessage(if (enabled) "Background audio playback enabled" else "Background audio disabled")
+                                },
+                                onPersistCompatibility = { eng, dec, delayMs, boostPct ->
+                                    viewModel.updateCompatibilitySettings(
+                                        enginePreference = eng,
+                                        decoderPreference = dec,
+                                        audioDelayMs = delayMs,
+                                        audioBoostPercent = boostPct
+                                    )
+                                },
+                                onOpenCompatibilitySettings = {
+                                    navController.navigate(RoutePlaybackCompatibilitySettings)
                                 }
                             )
                         }
@@ -572,6 +694,145 @@ fun LTAppNavigation(
                                 onRestorePurchases = { viewModel.restorePurchases() },
                                 onRetryBilling = { viewModel.refreshBilling() },
                                 onBack = { navController.popBackStack() }
+                            )
+                        }
+
+                        composable<RouteLtShare> {
+                            LtShareHubScreen(
+                                shareState = shareState,
+                                onSelectTransport = { viewModel.ltShareManager.selectTransportMode(it) },
+                                onGenerateQrClick = {
+                                    viewModel.ltShareManager.startReceivingSession()
+                                    navController.navigate(RouteLtShareGenerateQr)
+                                },
+                                onScanQrClick = { navController.navigate(RouteLtShareScanQr) },
+                                onScanWifiDirectPeers = { viewModel.ltShareManager.scanWifiDirectPeers() },
+                                onConnectWifiDirectPeer = { viewModel.ltShareManager.connectWifiDirectPeer(it) },
+                                onRefreshRadios = { viewModel.ltShareManager.refreshRadios() },
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
+
+                        composable<RouteLtShareGenerateQr> {
+                            LtShareGenerateQrScreen(
+                                shareState = shareState,
+                                onSelectTtlSeconds = { viewModel.ltShareManager.setQrTtlSeconds(it) },
+                                onRegenerateQr = { viewModel.ltShareManager.regenerateQr() },
+                                onOpenQrPreview = { navController.navigate(RouteLtShareQrPreview) },
+                                onCancelSession = {
+                                    viewModel.ltShareManager.cancelSession()
+                                    navController.popBackStack()
+                                },
+                                onBack = {
+                                    viewModel.ltShareManager.cancelSession()
+                                    navController.popBackStack()
+                                }
+                            )
+                        }
+
+                        composable<RouteLtShareQrPreview> {
+                            LtShareQrPreviewScreen(
+                                shareState = shareState,
+                                onContinueToConfirm = {
+                                    viewModel.ltShareManager.openPairingConfirmationFromPreview()
+                                    navController.navigate(RouteLtSharePairingConfirm)
+                                },
+                                onRescanQr = {
+                                    navController.popBackStack()
+                                    navController.navigate(RouteLtShareScanQr)
+                                },
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
+
+                        composable<RouteLtShareScanQr> {
+                            LtShareScanQrScreen(
+                                shareState = shareState,
+                                onQrDetected = { raw -> viewModel.ltShareManager.onQrScanned(raw) },
+                                onValidQrProceed = {
+                                    navController.navigate(RouteLtShareQrPreview) {
+                                        popUpTo(RouteLtShareScanQr) { inclusive = true }
+                                    }
+                                },
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
+
+                        composable<RouteLtSharePairingConfirm> {
+                            LtSharePairingConfirmScreen(
+                                shareState = shareState,
+                                onAccept = {
+                                    if (shareState.role == ShareRole.RECEIVER) {
+                                        viewModel.ltShareManager.approveIncomingPairing()
+                                    } else {
+                                        viewModel.ltShareManager.confirmSenderPairing()
+                                    }
+                                },
+                                onReject = {
+                                    if (shareState.role == ShareRole.RECEIVER) {
+                                        viewModel.ltShareManager.rejectIncomingPairing()
+                                    } else {
+                                        viewModel.ltShareManager.rejectSenderPairing()
+                                    }
+                                    navController.popBackStack(RouteLtShare, inclusive = false)
+                                },
+                                onBack = {
+                                    viewModel.ltShareManager.cancelSession()
+                                    navController.popBackStack(RouteLtShare, inclusive = false)
+                                }
+                            )
+                        }
+
+                        composable<RouteLtShareConnected> {
+                            LtShareConnectedDeviceScreen(
+                                shareState = shareState,
+                                libraryVideos = videos,
+                                libraryAudio = audioTracks,
+                                onAddUris = { viewModel.ltShareManager.addFilesFromUris(it) },
+                                onAddLibraryVideos = { viewModel.ltShareManager.addLibraryVideos(it) },
+                                onAddLibraryAudio = { viewModel.ltShareManager.addLibraryAudio(it) },
+                                onRemoveFile = { viewModel.ltShareManager.removeSelectedFile(it) },
+                                onStartTransfer = { viewModel.ltShareManager.startFileTransfer() },
+                                onBluetoothFallback = {
+                                    val btIntent = viewModel.ltShareManager.buildBluetoothShareFallbackIntent()
+                                    if (btIntent != null) {
+                                        runCatching { context.startActivity(btIntent) }
+                                            .onFailure { viewModel.showMessage("No Bluetooth share handler found.") }
+                                    }
+                                },
+                                onDisconnect = {
+                                    viewModel.ltShareManager.cancelSession()
+                                    navController.popBackStack(RouteLtShare, inclusive = false)
+                                }
+                            )
+                        }
+
+                        composable<RouteLtShareProgress> {
+                            LtShareTransferProgressScreen(
+                                shareState = shareState,
+                                onCancelTransfer = {
+                                    viewModel.ltShareManager.cancelTransfer()
+                                    navController.popBackStack(RouteLtShareConnected, inclusive = false)
+                                }
+                            )
+                        }
+
+                        composable<RouteLtShareSuccess> {
+                            LtShareTransferSuccessScreen(
+                                shareState = shareState,
+                                onPlayMediaUri = { uriStr ->
+                                    viewModel.openPickedVideoUri(Uri.parse(uriStr)) {
+                                        navController.navigate(RouteFullPlayer)
+                                    }
+                                },
+                                onSendMore = {
+                                    viewModel.ltShareManager.finishSuccessToConnected()
+                                    navController.popBackStack(RouteLtShareConnected, inclusive = false)
+                                },
+                                onDone = {
+                                    viewModel.ltShareManager.resetToHub()
+                                    navController.popBackStack(RouteLtShare, inclusive = false)
+                                }
                             )
                         }
                     }

@@ -3,6 +3,7 @@ package com.example.player
 import android.content.ComponentName
 import android.content.Context
 import android.media.audiofx.Equalizer
+import android.media.audiofx.LoudnessEnhancer
 import android.net.Uri
 import androidx.annotation.OptIn
 import androidx.media3.common.C
@@ -15,9 +16,15 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import com.example.data.model.ActiveDecoderMode
+import com.example.data.model.ActivePlaybackEngine
+import com.example.data.model.AppSettings
 import com.example.data.model.AspectRatioMode
 import com.example.data.model.AudioItem
 import com.example.data.model.AudioTrackOption
+import com.example.data.model.DecoderPreference
+import com.example.data.model.PlaybackDiagnosticReport
+import com.example.data.model.PlaybackEnginePreference
 import com.example.data.model.RepeatModeOption
 import com.example.data.model.SubtitleCue
 import com.example.data.model.SubtitleTrackOption
@@ -38,6 +45,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.videolan.libvlc.util.VLCVideoLayout
 
 data class QueueEntry(
     val uriString: String,
@@ -48,7 +57,8 @@ data class QueueEntry(
     val artworkUri: String? = null,
     val sizeBytes: Long = 0L,
     val resolution: String = "",
-    val folderPath: String = ""
+    val folderPath: String = "",
+    val containerExtension: String = ""
 )
 
 data class EqualizerBandUi(
@@ -83,7 +93,16 @@ data class PlayerUiState(
     val equalizerEnabled: Boolean = false,
     val equalizerPresets: List<String> = emptyList(),
     val selectedEqPreset: Int = -1,
-    val equalizerBands: List<EqualizerBandUi> = emptyList()
+    val equalizerBands: List<EqualizerBandUi> = emptyList(),
+    val activeEngine: ActivePlaybackEngine = ActivePlaybackEngine.NONE,
+    val enginePreference: PlaybackEnginePreference = PlaybackEnginePreference.AUTO,
+    val decoderPreference: DecoderPreference = DecoderPreference.AUTO,
+    val activeDecoderMode: ActiveDecoderMode = ActiveDecoderMode.UNKNOWN,
+    val engineNotice: String? = null,
+    val diagnosticReport: PlaybackDiagnosticReport? = null,
+    val preferredAudioLanguage: String = "und",
+    val audioDelayMs: Long = 0L,
+    val audioBoostPercent: Int = 100
 )
 
 class PlayerController(
@@ -99,26 +118,122 @@ class PlayerController(
     private var progressJob: Job? = null
     private var sleepTimerJob: Job? = null
     private var equalizer: Equalizer? = null
+    private var loudnessEnhancer: LoudnessEnhancer? = null
     private var pendingAction: (() -> Unit)? = null
+
+    private var attemptedEnginesForCurrentItem: MutableSet<ActivePlaybackEngine> = mutableSetOf()
+    private var swFallbackTriedInCurrentEngine: Boolean = false
+    private var activeSubtitleDelayMs: Long = 0L
+
+    private val vlcEngine: VlcPlaybackEngine by lazy {
+        VlcPlaybackEngine(
+            context = context,
+            scope = scope,
+            onStateChanged = { isPlaying, isBuffering ->
+                if (_state.value.activeEngine != ActivePlaybackEngine.VLC) return@VlcPlaybackEngine
+                val pState = when {
+                    isBuffering -> Player.STATE_BUFFERING
+                    isPlaying -> Player.STATE_READY
+                    else -> Player.STATE_READY
+                }
+                _state.update {
+                    it.copy(
+                        isPlaying = isPlaying,
+                        playbackState = pState
+                    )
+                }
+                if (!isPlaying) {
+                    persistCurrentPosition()
+                }
+            },
+            onProgress = { posMs, durMs ->
+                if (_state.value.activeEngine != ActivePlaybackEngine.VLC) return@VlcPlaybackEngine
+                val resolvedDur = durMs.takeIf { it > 0L } ?: _state.value.durationMs
+                _state.update {
+                    it.copy(
+                        currentPositionMs = posMs,
+                        durationMs = resolvedDur,
+                        bufferedPositionMs = resolvedDur
+                    )
+                }
+            },
+            onTracksUpdated = { audio, subs ->
+                if (_state.value.activeEngine != ActivePlaybackEngine.VLC) return@VlcPlaybackEngine
+                val external = _state.value.subtitleTracks.filter { !it.isEmbedded }
+                _state.update {
+                    it.copy(
+                        audioTracks = audio,
+                        subtitleTracks = subs + external
+                    )
+                }
+            },
+            onDecoderResolved = { mode ->
+                if (_state.value.activeEngine == ActivePlaybackEngine.VLC) {
+                    _state.update { it.copy(activeDecoderMode = mode) }
+                }
+            },
+            onEnded = {
+                if (_state.value.activeEngine != ActivePlaybackEngine.VLC) return@VlcPlaybackEngine
+                handleVlcEnded()
+            },
+            onError = { errMsg ->
+                if (_state.value.activeEngine != ActivePlaybackEngine.VLC) return@VlcPlaybackEngine
+                handleEngineFailure(
+                    failedEngine = ActivePlaybackEngine.VLC,
+                    errorDetail = errMsg,
+                    isDecoderInitFailure = "decoder" in errMsg.lowercase() || "codec" in errMsg.lowercase()
+                )
+            }
+        )
+    }
 
     val playerOrNull: Player?
         get() = controller
 
     init {
-        observeAudioSessionForEqualizer()
+        observeAudioSessionForEffects()
     }
 
-    private fun observeAudioSessionForEqualizer() {
+    fun applySettings(settings: AppSettings) {
+        activeSubtitleDelayMs = settings.subtitlePrefs.delayMs
+        PlaybackService.setDesiredDecoderPreference(settings.decoderPreference)
+        _state.update {
+            it.copy(
+                enginePreference = settings.enginePreference,
+                decoderPreference = settings.decoderPreference,
+                preferredAudioLanguage = settings.preferredAudioLanguage,
+                audioDelayMs = settings.audioDelayMs,
+                audioBoostPercent = settings.audioBoostPercent
+            )
+        }
+        applyPreferredAudioLanguageToMedia3(settings.preferredAudioLanguage)
+        applyAudioBoost(settings.audioBoostPercent)
+        if (_state.value.activeEngine == ActivePlaybackEngine.VLC) {
+            vlcEngine.setAudioDelayMs(settings.audioDelayMs)
+            vlcEngine.setSubtitleDelayMs(settings.subtitlePrefs.delayMs)
+            vlcEngine.setAudioBoostPercent(settings.audioBoostPercent)
+        }
+    }
+
+    fun attachVlcLayout(layout: VLCVideoLayout) {
+        vlcEngine.attachLayout(layout)
+    }
+
+    fun detachVlcLayout(layout: VLCVideoLayout?) {
+        vlcEngine.detachLayout(layout)
+    }
+
+    private fun observeAudioSessionForEffects() {
         scope.launch {
             PlaybackService.audioSessionId.collect { sessionId ->
                 if (sessionId != 0) {
-                    initEqualizer(sessionId)
+                    initAudioEffects(sessionId)
                 }
             }
         }
     }
 
-    private fun initEqualizer(audioSessionId: Int) {
+    private fun initAudioEffects(audioSessionId: Int) {
         runCatching {
             equalizer?.release()
             val eq = Equalizer(0, audioSessionId)
@@ -148,6 +263,40 @@ class PlayerController(
         }.onFailure {
             _state.update { it.copy(equalizerSupported = false) }
         }
+
+        runCatching {
+            loudnessEnhancer?.release()
+            val enhancer = LoudnessEnhancer(audioSessionId)
+            loudnessEnhancer = enhancer
+            applyAudioBoost(_state.value.audioBoostPercent)
+        }
+    }
+
+    private fun applyAudioBoost(percent: Int) {
+        val clamped = percent.coerceIn(100, 200)
+        if (_state.value.activeEngine == ActivePlaybackEngine.VLC) {
+            vlcEngine.setAudioBoostPercent(clamped)
+        }
+        runCatching {
+            loudnessEnhancer?.let { enhancer ->
+                val gainMb = (clamped - 100) * 10
+                enhancer.setTargetGain(gainMb)
+                enhancer.enabled = clamped > 100
+            }
+        }
+    }
+
+    private fun applyPreferredAudioLanguageToMedia3(langCode: String) {
+        val mc = controller ?: return
+        runCatching {
+            val builder = mc.trackSelectionParameters.buildUpon()
+            if (langCode == "und" || langCode.isBlank()) {
+                builder.setPreferredAudioLanguages()
+            } else {
+                builder.setPreferredAudioLanguage(langCode)
+            }
+            mc.trackSelectionParameters = builder.build()
+        }
     }
 
     fun connect() {
@@ -162,6 +311,7 @@ class PlayerController(
                     controller = mc
                     mc.addListener(playerListener)
                     _state.update { it.copy(isConnected = true) }
+                    applyPreferredAudioLanguageToMedia3(_state.value.preferredAudioLanguage)
                     pendingAction?.invoke()
                     pendingAction = null
                     startProgressLoop()
@@ -173,6 +323,7 @@ class PlayerController(
 
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (_state.value.activeEngine != ActivePlaybackEngine.MEDIA3) return
             _state.update { it.copy(isPlaying = isPlaying) }
             if (!isPlaying) {
                 persistCurrentPosition()
@@ -180,23 +331,35 @@ class PlayerController(
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            if (_state.value.activeEngine != ActivePlaybackEngine.MEDIA3) return
             _state.update {
                 it.copy(
                     playbackState = playbackState,
-                    durationMs = controller?.duration?.takeIf { d -> d > 0L } ?: it.durationMs
+                    durationMs = controller?.duration?.takeIf { d -> d > 0L } ?: it.durationMs,
+                    activeDecoderMode = if (playbackState == Player.STATE_READY) {
+                        if (it.decoderPreference == DecoderPreference.SOFTWARE) {
+                            ActiveDecoderMode.SOFTWARE
+                        } else {
+                            ActiveDecoderMode.HARDWARE
+                        }
+                    } else it.activeDecoderMode
                 )
             }
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            if (_state.value.activeEngine != ActivePlaybackEngine.MEDIA3) return
             val idx = controller?.currentMediaItemIndex ?: 0
             val queue = _state.value.queue
             val entry = queue.getOrNull(idx)
+            attemptedEnginesForCurrentItem = mutableSetOf(ActivePlaybackEngine.MEDIA3)
+            swFallbackTriedInCurrentEngine = false
             _state.update {
                 it.copy(
                     currentIndex = idx,
                     currentEntry = entry,
                     playbackError = null,
+                    diagnosticReport = null,
                     durationMs = entry?.durationMs ?: 0L,
                     externalSubtitleCues = emptyList(),
                     selectedSubtitleId = null
@@ -207,6 +370,7 @@ class PlayerController(
 
         @OptIn(UnstableApi::class)
         override fun onTracksChanged(tracks: Tracks) {
+            if (_state.value.activeEngine != ActivePlaybackEngine.MEDIA3) return
             val audioList = mutableListOf<AudioTrackOption>()
             val textList = mutableListOf<SubtitleTrackOption>()
 
@@ -261,18 +425,205 @@ class PlayerController(
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            val entry = _state.value.currentEntry
-            val diagnostic = if (entry != null) {
-                val report = CodecInspector.inspectUri(
-                    context,
-                    Uri.parse(entry.uriString),
-                    entry.title.substringAfterLast('.', "")
-                )
-                "${error.errorCodeName}: ${error.localizedMessage ?: "Playback error"}\n${report.message}"
-            } else {
-                "${error.errorCodeName}: ${error.localizedMessage ?: "Unsupported format or missing file."}"
+            if (_state.value.activeEngine != ActivePlaybackEngine.MEDIA3) return
+            val isDecoderErr = error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+                error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
+                error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
+                error.errorCodeName.contains("DECODER", ignoreCase = true)
+            handleEngineFailure(
+                failedEngine = ActivePlaybackEngine.MEDIA3,
+                errorDetail = "${error.errorCodeName}: ${error.localizedMessage ?: "Playback failed"}",
+                isDecoderInitFailure = isDecoderErr
+            )
+        }
+    }
+
+    private fun handleEngineFailure(
+        failedEngine: ActivePlaybackEngine,
+        errorDetail: String,
+        isDecoderInitFailure: Boolean
+    ) {
+        val currentState = _state.value
+        val entry = currentState.currentEntry
+        val resumePos = currentPositionMs().coerceAtLeast(0L)
+
+        val decision = PlaybackEnginePolicy.decideOnFailure(
+            preference = currentState.enginePreference,
+            failedEngine = failedEngine,
+            attemptedEngines = attemptedEnginesForCurrentItem,
+            decoderPreference = currentState.decoderPreference,
+            softwareFallbackAlreadyTriedInEngine = swFallbackTriedInCurrentEngine,
+            isDecoderInitFailure = isDecoderInitFailure
+        )
+
+        when (decision) {
+            is EngineFallbackDecision.RetryWithSoftwareDecoder -> {
+                swFallbackTriedInCurrentEngine = true
+                _state.update {
+                    it.copy(
+                        engineNotice = decision.reason,
+                        playbackError = null,
+                        diagnosticReport = null,
+                        activeDecoderMode = ActiveDecoderMode.SOFTWARE
+                    )
+                }
+                if (entry != null) {
+                    launchEntryOnEngine(
+                        engine = decision.engine,
+                        entry = entry,
+                        startPosMs = resumePos,
+                        decoderOverride = DecoderPreference.SOFTWARE
+                    )
+                }
             }
-            _state.update { it.copy(playbackError = diagnostic, isPlaying = false) }
+
+            is EngineFallbackDecision.SwitchEngine -> {
+                attemptedEnginesForCurrentItem.add(decision.nextEngine)
+                swFallbackTriedInCurrentEngine = false
+                if (failedEngine == ActivePlaybackEngine.MEDIA3) {
+                    controller?.stop()
+                    controller?.clearMediaItems()
+                } else if (failedEngine == ActivePlaybackEngine.VLC) {
+                    vlcEngine.stopPlaybackOnly()
+                }
+                _state.update {
+                    it.copy(
+                        activeEngine = decision.nextEngine,
+                        engineNotice = decision.reason,
+                        playbackError = null,
+                        diagnosticReport = null,
+                        activeDecoderMode = ActiveDecoderMode.UNKNOWN
+                    )
+                }
+                if (entry != null) {
+                    launchEntryOnEngine(
+                        engine = decision.nextEngine,
+                        entry = entry,
+                        startPosMs = resumePos,
+                        decoderOverride = decision.nextDecoder
+                    )
+                }
+            }
+
+            is EngineFallbackDecision.TerminalFailure -> {
+                val attemptedSnapshot = attemptedEnginesForCurrentItem.toList()
+                    .ifEmpty { listOf(failedEngine) }
+                if (entry == null) {
+                    _state.update {
+                        it.copy(
+                            isPlaying = false,
+                            playbackError = errorDetail
+                        )
+                    }
+                    return
+                }
+                scope.launch {
+                    val report = withContext(Dispatchers.IO) {
+                        CodecInspector.diagnoseFailure(
+                            context = context,
+                            uri = Uri.parse(entry.uriString),
+                            containerExtension = entry.containerExtension.ifBlank {
+                                entry.title.substringAfterLast('.', "")
+                            },
+                            errorDetail = errorDetail,
+                            attemptedEngines = attemptedSnapshot,
+                            decoderPreference = currentState.decoderPreference
+                        )
+                    }
+                    _state.update {
+                        it.copy(
+                            isPlaying = false,
+                            playbackError = report.userMessage,
+                            diagnosticReport = report
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun launchEntryOnEngine(
+        engine: ActivePlaybackEngine,
+        entry: QueueEntry,
+        startPosMs: Long,
+        decoderOverride: DecoderPreference = _state.value.decoderPreference
+    ) {
+        val currentState = _state.value
+        when (engine) {
+            ActivePlaybackEngine.VLC -> {
+                controller?.pause()
+                _state.update {
+                    it.copy(
+                        activeEngine = ActivePlaybackEngine.VLC,
+                        playbackError = null,
+                        diagnosticReport = null
+                    )
+                }
+                vlcEngine.playUri(
+                    uri = Uri.parse(entry.uriString),
+                    startPositionMs = startPosMs,
+                    decoderPreference = decoderOverride,
+                    speed = currentState.playbackSpeed,
+                    aspectRatio = currentState.aspectRatioMode,
+                    audioDelayMs = currentState.audioDelayMs,
+                    subDelayMs = activeSubtitleDelayMs,
+                    audioBoostPercent = currentState.audioBoostPercent,
+                    preferredAudioLanguage = currentState.preferredAudioLanguage
+                )
+                startProgressLoop()
+            }
+
+            ActivePlaybackEngine.MEDIA3 -> {
+                vlcEngine.stopPlaybackOnly()
+                PlaybackService.setDesiredDecoderPreference(decoderOverride)
+                val loadAction = {
+                    val queue = _state.value.queue
+                    val mediaItems = queue.map { item ->
+                        MediaItem.Builder()
+                            .setUri(Uri.parse(item.uriString))
+                            .setMediaId(item.uriString)
+                            .setMediaMetadata(
+                                MediaMetadata.Builder()
+                                    .setTitle(item.title)
+                                    .setSubtitle(item.subtitle)
+                                    .build()
+                            )
+                            .build()
+                    }
+                    val idx = _state.value.currentIndex.coerceIn(0, mediaItems.lastIndex.coerceAtLeast(0))
+                    _state.update {
+                        it.copy(
+                            activeEngine = ActivePlaybackEngine.MEDIA3,
+                            playbackError = null,
+                            diagnosticReport = null
+                        )
+                    }
+                    controller?.apply {
+                        if (mediaItems.isNotEmpty()) {
+                            setMediaItems(mediaItems, idx, startPosMs)
+                        } else {
+                            setMediaItem(
+                                MediaItem.Builder()
+                                    .setUri(Uri.parse(entry.uriString))
+                                    .setMediaId(entry.uriString)
+                                    .build(),
+                                startPosMs
+                            )
+                        }
+                        setPlaybackSpeed(currentState.playbackSpeed)
+                        applyPreferredAudioLanguageToMedia3(currentState.preferredAudioLanguage)
+                        prepare()
+                        playWhenReady = true
+                    }
+                    startProgressLoop()
+                }
+                if (controller != null) loadAction() else {
+                    pendingAction = { loadAction() }
+                    connect()
+                }
+            }
+
+            ActivePlaybackEngine.NONE -> Unit
         }
     }
 
@@ -294,60 +645,51 @@ class PlayerController(
                 isVideo = true,
                 sizeBytes = v.sizeBytes,
                 resolution = v.resolutionLabel,
-                folderPath = v.folderPath
+                folderPath = v.folderPath,
+                containerExtension = v.containerExtension
             )
         }
         val targetVideo = videos[safeIdx]
+        val chosenEngine = PlaybackEnginePolicy.selectInitialEngine(_state.value.enginePreference)
 
-        val action = {
-            scope.launch {
-                val savedPos = if (resumeFromSaved) {
-                    val pos = mediaRepository.getSavedPosition(targetVideo.uriString)
-                    if (targetVideo.durationMs > 10_000L && pos in 2_000L..(targetVideo.durationMs - 4_000L)) pos else 0L
-                } else 0L
+        scope.launch {
+            val savedPos = if (resumeFromSaved) {
+                val pos = mediaRepository.getSavedPosition(targetVideo.uriString)
+                if (targetVideo.durationMs > 10_000L && pos in 2_000L..(targetVideo.durationMs - 4_000L)) pos else 0L
+            } else 0L
 
-                val mediaItems = entries.map { entry ->
-                    MediaItem.Builder()
-                        .setUri(Uri.parse(entry.uriString))
-                        .setMediaId(entry.uriString)
-                        .setMediaMetadata(
-                            MediaMetadata.Builder()
-                                .setTitle(entry.title)
-                                .setSubtitle(entry.subtitle)
-                                .build()
-                        )
-                        .build()
-                }
-                val discoveredSubs = mediaRepository.scanner.discoverSubtitlesForVideo(targetVideo)
-                _state.update {
-                    it.copy(
-                        queue = entries,
-                        currentIndex = safeIdx,
-                        currentEntry = entries[safeIdx],
-                        playbackSpeed = defaultSpeed,
-                        aspectRatioMode = defaultAspectRatio,
-                        playbackError = null,
-                        subtitleTracks = discoveredSubs,
-                        externalSubtitleCues = emptyList(),
-                        selectedSubtitleId = null
-                    )
-                }
-                controller?.apply {
-                    setMediaItems(mediaItems, safeIdx, savedPos)
-                    setPlaybackSpeed(defaultSpeed)
-                    prepare()
-                    playWhenReady = true
-                }
-                recordHistoryEntry(entries[safeIdx])
+            val discoveredSubs = mediaRepository.scanner.discoverSubtitlesForVideo(targetVideo)
+            attemptedEnginesForCurrentItem = mutableSetOf(chosenEngine)
+            swFallbackTriedInCurrentEngine = false
 
-                if (discoveredSubs.isNotEmpty()) {
-                    selectSubtitleTrack(discoveredSubs.first(), "UTF-8")
-                }
+            _state.update {
+                it.copy(
+                    queue = entries,
+                    currentIndex = safeIdx,
+                    currentEntry = entries[safeIdx],
+                    playbackSpeed = defaultSpeed,
+                    aspectRatioMode = defaultAspectRatio,
+                    playbackError = null,
+                    diagnosticReport = null,
+                    engineNotice = null,
+                    activeEngine = chosenEngine,
+                    activeDecoderMode = ActiveDecoderMode.UNKNOWN,
+                    subtitleTracks = discoveredSubs,
+                    externalSubtitleCues = emptyList(),
+                    selectedSubtitleId = null
+                )
             }
-        }
-        if (controller != null) action() else {
-            pendingAction = { action() }
-            connect()
+
+            launchEntryOnEngine(
+                engine = chosenEngine,
+                entry = entries[safeIdx],
+                startPosMs = savedPos
+            )
+            recordHistoryEntry(entries[safeIdx])
+
+            if (discoveredSubs.isNotEmpty()) {
+                selectSubtitleTrack(discoveredSubs.first(), "UTF-8")
+            }
         }
     }
 
@@ -370,6 +712,10 @@ class PlayerController(
                 folderPath = a.folderPath
             )
         }
+        vlcEngine.stopPlaybackOnly()
+        attemptedEnginesForCurrentItem = mutableSetOf(ActivePlaybackEngine.MEDIA3)
+        swFallbackTriedInCurrentEngine = false
+
         val action = {
             val mediaItems = entries.map { entry ->
                 MediaItem.Builder()
@@ -390,6 +736,9 @@ class PlayerController(
                     currentIndex = safeIdx,
                     currentEntry = entries[safeIdx],
                     playbackError = null,
+                    diagnosticReport = null,
+                    engineNotice = null,
+                    activeEngine = ActivePlaybackEngine.MEDIA3,
                     externalSubtitleCues = emptyList(),
                     subtitleTracks = emptyList()
                 )
@@ -407,7 +756,73 @@ class PlayerController(
         }
     }
 
+    fun switchEngineNow(targetPref: PlaybackEnginePreference) {
+        val targetEngine = when (targetPref) {
+            PlaybackEnginePreference.VLC -> ActivePlaybackEngine.VLC
+            PlaybackEnginePreference.MEDIA3 -> ActivePlaybackEngine.MEDIA3
+            PlaybackEnginePreference.AUTO -> PlaybackEnginePolicy.selectInitialEngine(targetPref)
+        }
+        val entry = _state.value.currentEntry
+        val resumePos = currentPositionMs().coerceAtLeast(0L)
+        _state.update {
+            it.copy(
+                enginePreference = targetPref,
+                engineNotice = "Switched playback engine to ${targetEngine.label}."
+            )
+        }
+        if (entry != null) {
+            attemptedEnginesForCurrentItem = mutableSetOf(targetEngine)
+            swFallbackTriedInCurrentEngine = false
+            launchEntryOnEngine(targetEngine, entry, resumePos)
+        }
+    }
+
+    fun switchDecoderNow(targetDecoder: DecoderPreference) {
+        val entry = _state.value.currentEntry
+        val resumePos = currentPositionMs().coerceAtLeast(0L)
+        PlaybackService.setDesiredDecoderPreference(targetDecoder)
+        _state.update {
+            it.copy(
+                decoderPreference = targetDecoder,
+                engineNotice = "Decoder set to ${targetDecoder.label}."
+            )
+        }
+        if (entry != null) {
+            val active = _state.value.activeEngine.takeIf { it != ActivePlaybackEngine.NONE }
+                ?: PlaybackEnginePolicy.selectInitialEngine(_state.value.enginePreference)
+            attemptedEnginesForCurrentItem = mutableSetOf(active)
+            swFallbackTriedInCurrentEngine = targetDecoder == DecoderPreference.SOFTWARE
+            launchEntryOnEngine(active, entry, resumePos, decoderOverride = targetDecoder)
+        }
+    }
+
+    fun retryCurrentEntry(forceSoftware: Boolean = false) {
+        val entry = _state.value.currentEntry ?: return
+        val resumePos = currentPositionMs().coerceAtLeast(0L)
+        val chosenEngine = PlaybackEnginePolicy.selectInitialEngine(_state.value.enginePreference)
+        attemptedEnginesForCurrentItem = mutableSetOf(chosenEngine)
+        swFallbackTriedInCurrentEngine = forceSoftware
+        val decoderPref = if (forceSoftware) DecoderPreference.SOFTWARE else _state.value.decoderPreference
+        launchEntryOnEngine(chosenEngine, entry, resumePos, decoderOverride = decoderPref)
+    }
+
+    fun clearEngineNotice() {
+        _state.update { it.copy(engineNotice = null) }
+    }
+
+    private fun currentPositionMs(): Long {
+        return when (_state.value.activeEngine) {
+            ActivePlaybackEngine.VLC -> vlcEngine.currentPositionMs().takeIf { it > 0L } ?: _state.value.currentPositionMs
+            ActivePlaybackEngine.MEDIA3 -> controller?.currentPosition ?: _state.value.currentPositionMs
+            ActivePlaybackEngine.NONE -> _state.value.currentPositionMs
+        }
+    }
+
     fun togglePlayPause() {
+        if (_state.value.activeEngine == ActivePlaybackEngine.VLC) {
+            if (vlcEngine.isPlaying()) vlcEngine.pause() else vlcEngine.play()
+            return
+        }
         val mc = controller
         if (mc != null) {
             if (mc.isPlaying) mc.pause() else mc.play()
@@ -418,53 +833,123 @@ class PlayerController(
     }
 
     fun pause() {
-        controller?.pause()
+        if (_state.value.activeEngine == ActivePlaybackEngine.VLC) {
+            vlcEngine.pause()
+        } else {
+            controller?.pause()
+        }
     }
 
     fun seekTo(positionMs: Long) {
-        val dur = controller?.duration?.takeIf { it > 0L } ?: _state.value.durationMs
-        val clamped = positionMs.coerceIn(0L, dur.coerceAtLeast(0L))
-        controller?.seekTo(clamped)
+        val dur = _state.value.durationMs.coerceAtLeast(0L)
+        val clamped = if (dur > 0L) positionMs.coerceIn(0L, dur) else positionMs.coerceAtLeast(0L)
+        if (_state.value.activeEngine == ActivePlaybackEngine.VLC) {
+            vlcEngine.seekTo(clamped)
+        } else {
+            controller?.seekTo(clamped)
+        }
         _state.update { it.copy(currentPositionMs = clamped) }
     }
 
     fun seekForward10s() {
-        val pos = controller?.currentPosition ?: _state.value.currentPositionMs
-        seekTo(pos + 10_000L)
+        seekTo(currentPositionMs() + 10_000L)
     }
 
     fun seekBackward10s() {
-        val pos = controller?.currentPosition ?: _state.value.currentPositionMs
-        seekTo(pos - 10_000L)
+        seekTo(currentPositionMs() - 10_000L)
+    }
+
+    private fun handleVlcEnded() {
+        val stateVal = _state.value
+        when (stateVal.repeatMode) {
+            RepeatModeOption.ONE -> {
+                stateVal.currentEntry?.let { launchEntryOnEngine(ActivePlaybackEngine.VLC, it, 0L) }
+            }
+            RepeatModeOption.ALL -> {
+                if (stateVal.queue.isNotEmpty()) {
+                    val nextIdx = (stateVal.currentIndex + 1) % stateVal.queue.size
+                    playQueueIndex(nextIdx)
+                }
+            }
+            RepeatModeOption.OFF -> {
+                if (stateVal.currentIndex + 1 < stateVal.queue.size) {
+                    playQueueIndex(stateVal.currentIndex + 1)
+                }
+            }
+        }
     }
 
     fun skipNext() {
+        if (_state.value.activeEngine == ActivePlaybackEngine.VLC) {
+            val next = _state.value.currentIndex + 1
+            if (next in _state.value.queue.indices) {
+                playQueueIndex(next)
+            }
+            return
+        }
         controller?.let { if (it.hasNextMediaItem()) it.seekToNextMediaItem() }
     }
 
     fun skipPrevious() {
+        if (_state.value.activeEngine == ActivePlaybackEngine.VLC) {
+            val prev = _state.value.currentIndex - 1
+            if (prev in _state.value.queue.indices) {
+                playQueueIndex(prev)
+            } else {
+                seekTo(0L)
+            }
+            return
+        }
         controller?.let { if (it.hasPreviousMediaItem()) it.seekToPreviousMediaItem() else it.seekTo(0L) }
     }
 
     fun playQueueIndex(index: Int) {
-        if (index in _state.value.queue.indices) {
+        val queue = _state.value.queue
+        if (index !in queue.indices) return
+        if (_state.value.activeEngine == ActivePlaybackEngine.VLC ||
+            _state.value.enginePreference == PlaybackEnginePreference.VLC
+        ) {
+            val entry = queue[index]
+            val engine = PlaybackEnginePolicy.selectInitialEngine(_state.value.enginePreference)
+            attemptedEnginesForCurrentItem = mutableSetOf(engine)
+            swFallbackTriedInCurrentEngine = false
+            _state.update {
+                it.copy(
+                    currentIndex = index,
+                    currentEntry = entry,
+                    playbackError = null,
+                    diagnosticReport = null,
+                    externalSubtitleCues = emptyList(),
+                    selectedSubtitleId = null
+                )
+            }
+            launchEntryOnEngine(engine, entry, 0L)
+            recordHistoryEntry(entry)
+        } else {
             controller?.seekTo(index, 0L)
         }
     }
 
     fun setPlaybackSpeed(speed: Float) {
         val safeSpeed = speed.coerceIn(0.25f, 4.0f)
-        controller?.setPlaybackSpeed(safeSpeed)
+        if (_state.value.activeEngine == ActivePlaybackEngine.VLC) {
+            vlcEngine.setPlaybackSpeed(safeSpeed)
+        } else {
+            controller?.setPlaybackSpeed(safeSpeed)
+        }
         _state.update { it.copy(playbackSpeed = safeSpeed) }
     }
 
     fun cycleAspectRatio() {
         val modes = AspectRatioMode.entries
         val next = modes[(_state.value.aspectRatioMode.ordinal + 1) % modes.size]
-        _state.update { it.copy(aspectRatioMode = next) }
+        setAspectRatio(next)
     }
 
     fun setAspectRatio(mode: AspectRatioMode) {
+        if (_state.value.activeEngine == ActivePlaybackEngine.VLC) {
+            vlcEngine.setAspectRatio(mode)
+        }
         _state.update { it.copy(aspectRatioMode = mode) }
     }
 
@@ -489,12 +974,32 @@ class PlayerController(
     }
 
     fun selectAudioTrack(option: AudioTrackOption) {
+        if (option.groupIndex == VlcPlaybackEngine.VLC_GROUP_SENTINEL ||
+            _state.value.activeEngine == ActivePlaybackEngine.VLC
+        ) {
+            vlcEngine.selectAudioTrack(option.trackIndex)
+            return
+        }
         val mc = controller ?: return
         val group = mc.currentTracks.groups.getOrNull(option.groupIndex) ?: return
         mc.trackSelectionParameters = mc.trackSelectionParameters
             .buildUpon()
             .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, option.trackIndex))
             .build()
+    }
+
+    fun setAudioDelayMs(delayMs: Long) {
+        val clamped = delayMs.coerceIn(-10_000L, 10_000L)
+        _state.update { it.copy(audioDelayMs = clamped) }
+        if (_state.value.activeEngine == ActivePlaybackEngine.VLC) {
+            vlcEngine.setAudioDelayMs(clamped)
+        }
+    }
+
+    fun setAudioBoostPercent(boostPercent: Int) {
+        val clamped = boostPercent.coerceIn(100, 200)
+        _state.update { it.copy(audioBoostPercent = clamped) }
+        applyAudioBoost(clamped)
     }
 
     fun loadExternalSubtitleUri(uri: Uri, encoding: String) {
@@ -515,23 +1020,36 @@ class PlayerController(
                     externalSubtitleCues = cues
                 )
             }
+            if (_state.value.activeEngine == ActivePlaybackEngine.VLC) {
+                withContext(Dispatchers.Main.immediate) {
+                    // Disable VLC native subtitle rendering when Compose overlay handles external cues cleanly (incl. Bengali)
+                    vlcEngine.selectEmbeddedSubtitleTrack(null)
+                }
+            }
         }
     }
 
     fun selectSubtitleTrack(option: SubtitleTrackOption?, encoding: String) {
         val mc = controller
         if (option == null) {
-            mc?.let {
-                it.trackSelectionParameters = it.trackSelectionParameters
-                    .buildUpon()
-                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-                    .build()
+            if (_state.value.activeEngine == ActivePlaybackEngine.VLC) {
+                vlcEngine.selectEmbeddedSubtitleTrack(null)
+            } else {
+                mc?.let {
+                    it.trackSelectionParameters = it.trackSelectionParameters
+                        .buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                        .build()
+                }
             }
             _state.update { it.copy(selectedSubtitleId = null, externalSubtitleCues = emptyList()) }
             return
         }
 
-        if (option.isEmbedded && mc != null) {
+        if (option.isEmbedded && option.groupIndex == VlcPlaybackEngine.VLC_GROUP_SENTINEL) {
+            vlcEngine.selectEmbeddedSubtitleTrack(option.trackIndex)
+            _state.update { it.copy(selectedSubtitleId = option.id, externalSubtitleCues = emptyList()) }
+        } else if (option.isEmbedded && mc != null) {
             val group = mc.currentTracks.groups.getOrNull(option.groupIndex)
             if (group != null) {
                 mc.trackSelectionParameters = mc.trackSelectionParameters
@@ -542,11 +1060,15 @@ class PlayerController(
             }
             _state.update { it.copy(selectedSubtitleId = option.id, externalSubtitleCues = emptyList()) }
         } else if (option.uriString != null) {
-            mc?.let {
-                it.trackSelectionParameters = it.trackSelectionParameters
-                    .buildUpon()
-                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-                    .build()
+            if (_state.value.activeEngine == ActivePlaybackEngine.VLC) {
+                vlcEngine.selectEmbeddedSubtitleTrack(null)
+            } else {
+                mc?.let {
+                    it.trackSelectionParameters = it.trackSelectionParameters
+                        .buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                        .build()
+                }
             }
             scope.launch(Dispatchers.IO) {
                 val cues = SubtitleParser.loadFromUri(context, Uri.parse(option.uriString), encoding)
@@ -574,7 +1096,7 @@ class PlayerController(
                 remaining--
             }
             if (isActive) {
-                controller?.pause()
+                pause()
                 _state.update { it.copy(sleepTimerRemainingSec = null) }
             }
         }
@@ -626,23 +1148,38 @@ class PlayerController(
         progressJob = scope.launch {
             var tickCount = 0
             while (isActive) {
-                val mc = controller
-                if (mc != null) {
-                    val pos = mc.currentPosition.coerceAtLeast(0L)
-                    val dur = mc.duration.takeIf { it > 0L } ?: _state.value.durationMs
-                    val buf = mc.bufferedPosition.coerceAtLeast(0L)
+                if (_state.value.activeEngine == ActivePlaybackEngine.VLC) {
+                    val pos = vlcEngine.currentPositionMs()
+                    val dur = vlcEngine.durationMs().takeIf { it > 0L } ?: _state.value.durationMs
                     _state.update {
                         it.copy(
                             currentPositionMs = pos,
                             durationMs = dur,
-                            bufferedPositionMs = buf
+                            bufferedPositionMs = dur
                         )
                     }
-                    if (mc.isPlaying && tickCount % 6 == 0) {
+                    if (vlcEngine.isPlaying() && tickCount % 6 == 0) {
                         persistCurrentPosition()
                     }
-                    tickCount++
+                } else {
+                    val mc = controller
+                    if (mc != null && _state.value.activeEngine == ActivePlaybackEngine.MEDIA3) {
+                        val pos = mc.currentPosition.coerceAtLeast(0L)
+                        val dur = mc.duration.takeIf { it > 0L } ?: _state.value.durationMs
+                        val buf = mc.bufferedPosition.coerceAtLeast(0L)
+                        _state.update {
+                            it.copy(
+                                currentPositionMs = pos,
+                                durationMs = dur,
+                                bufferedPositionMs = buf
+                            )
+                        }
+                        if (mc.isPlaying && tickCount % 6 == 0) {
+                            persistCurrentPosition()
+                        }
+                    }
                 }
+                tickCount++
                 delay(500L)
             }
         }
@@ -650,8 +1187,11 @@ class PlayerController(
 
     private fun persistCurrentPosition() {
         val entry = _state.value.currentEntry ?: return
-        val pos = controller?.currentPosition ?: _state.value.currentPositionMs
-        val dur = controller?.duration?.takeIf { it > 0L } ?: entry.durationMs
+        val pos = currentPositionMs()
+        val dur = when (_state.value.activeEngine) {
+            ActivePlaybackEngine.VLC -> vlcEngine.durationMs().takeIf { it > 0L } ?: entry.durationMs
+            else -> controller?.duration?.takeIf { it > 0L } ?: entry.durationMs
+        }
         scope.launch(Dispatchers.IO) {
             mediaRepository.savePlaybackPosition(
                 uriString = entry.uriString,
@@ -682,7 +1222,11 @@ class PlayerController(
         persistCurrentPosition()
         progressJob?.cancel()
         sleepTimerJob?.cancel()
+        runCatching { loudnessEnhancer?.release() }
+        loudnessEnhancer = null
         runCatching { equalizer?.release() }
+        equalizer = null
+        vlcEngine.release()
         controllerFuture?.let { MediaController.releaseFuture(it) }
         controllerFuture = null
         controller = null

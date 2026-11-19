@@ -14,21 +14,36 @@ object SubtitleParser {
         uri: Uri,
         encoding: String = "UTF-8"
     ): List<SubtitleCue> {
-        val charset = runCatching { Charset.forName(encoding) }.getOrDefault(Charsets.UTF_8)
-        val rawText = context.contentResolver.openInputStream(uri)?.use { stream ->
-            BufferedReader(InputStreamReader(stream, charset)).readText()
-        }.orEmpty()
+        val rawBytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return emptyList()
+        val rawText = decodeBytes(rawBytes, encoding)
         if (rawText.isBlank()) return emptyList()
         val lowerName = uri.toString().lowercase()
+        return parseAuto(rawText, lowerName)
+    }
+
+    fun decodeBytes(bytes: ByteArray, preferredEncoding: String = "UTF-8"): String {
+        if (bytes.isEmpty()) return ""
+        val detectedCharset = when {
+            bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte() -> Charsets.UTF_16LE
+            bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte() -> Charsets.UTF_16BE
+            bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte() -> Charsets.UTF_8
+            else -> runCatching { Charset.forName(preferredEncoding) }.getOrDefault(Charsets.UTF_8)
+        }
+        return String(bytes, detectedCharset).removePrefix("\uFEFF")
+    }
+
+    fun parseAuto(rawText: String, fileNameOrUri: String = ""): List<SubtitleCue> {
+        val clean = rawText.removePrefix("\uFEFF")
+        val lower = fileNameOrUri.lowercase()
         return when {
-            lowerName.endsWith(".vtt") || rawText.trimStart().startsWith("WEBVTT") -> parseVtt(rawText)
-            lowerName.endsWith(".ass") || lowerName.endsWith(".ssa") || rawText.contains("[Events]") -> parseAssSsa(rawText)
-            else -> parseSrt(rawText)
+            lower.endsWith(".vtt") || clean.trimStart().startsWith("WEBVTT") -> parseVtt(clean)
+            lower.endsWith(".ass") || lower.endsWith(".ssa") || clean.contains("[Events]") -> parseAssSsa(clean)
+            else -> parseSrt(clean)
         }
     }
 
     fun parseSrt(raw: String): List<SubtitleCue> {
-        val normalized = raw.replace("\r\n", "\n").replace("\r", "\n").trim()
+        val normalized = raw.removePrefix("\uFEFF").replace("\r\n", "\n").replace("\r", "\n").trim()
         if (normalized.isEmpty()) return emptyList()
         val blocks = normalized.split(Regex("\n\\s*\n"))
         val cues = mutableListOf<SubtitleCue>()

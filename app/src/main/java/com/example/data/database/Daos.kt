@@ -138,3 +138,15 @@ interface SafFolderDao {
     @Query("DELETE FROM saf_folders WHERE treeUri = :treeUri")
     suspend fun delete(treeUri: String)
 }
+
+@Dao
+interface ShareHistoryDao {
+    @Query("SELECT * FROM share_history ORDER BY completedAt DESC LIMIT 50")
+    fun observeRecent(): Flow<List<ShareTransferHistoryEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(entity: ShareTransferHistoryEntity): Long
+
+    @Query("DELETE FROM share_history")
+    suspend fun clearAll()
+}

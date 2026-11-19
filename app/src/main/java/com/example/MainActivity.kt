@@ -55,6 +55,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         if (::container.isInitialized) {
             container.playerController.release()
+            container.ltShareManager.release()
         }
         super.onDestroy()
     }

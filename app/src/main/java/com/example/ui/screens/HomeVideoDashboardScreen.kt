@@ -31,6 +31,7 @@ import androidx.compose.material.icons.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.ViewList
 import androidx.compose.material.icons.rounded.WorkspacePremium
@@ -103,6 +104,7 @@ fun HomeVideoDashboardScreen(
     onOpenStorage: () -> Unit,
     onOpenAllFolders: () -> Unit,
     onOpenPlaylists: () -> Unit,
+    onOpenLtShare: () -> Unit,
     onInspectCodec: (VideoItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -150,6 +152,7 @@ fun HomeVideoDashboardScreen(
                     onOpenStorage = onOpenStorage,
                     onOpenSearch = onOpenSearch,
                     onOpenDownloads = onOpenDownloads,
+                    onOpenLtShare = onOpenLtShare,
                     onOpenSettings = onOpenSettings
                 )
             }
@@ -560,6 +563,7 @@ private fun DashboardTopHeader(
     onOpenStorage: () -> Unit,
     onOpenSearch: () -> Unit,
     onOpenDownloads: () -> Unit,
+    onOpenLtShare: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
     Column(
@@ -606,6 +610,12 @@ private fun DashboardTopHeader(
                     modifier = Modifier.testTag("header_search_button")
                 ) {
                     Icon(Icons.Rounded.Search, contentDescription = "Global Search")
+                }
+                IconButton(
+                    onClick = onOpenLtShare,
+                    modifier = Modifier.testTag("header_ltshare_button")
+                ) {
+                    Icon(Icons.Rounded.Share, contentDescription = "LT SHARE", tint = ElectricGreen)
                 }
                 IconButton(
                     onClick = onOpenDownloads,

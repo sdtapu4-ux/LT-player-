@@ -19,11 +19,13 @@ import com.example.data.database.PlaylistItemEntity
 import com.example.data.model.AppSettings
 import com.example.data.model.AspectRatioMode
 import com.example.data.model.AudioItem
+import com.example.data.model.DecoderPreference
 import com.example.data.model.DownloadRecord
 import com.example.data.model.DownloadStatus
 import com.example.data.model.DuplicateMediaGroup
 import com.example.data.model.InstalledGameInfo
 import com.example.data.model.MediaFolder
+import com.example.data.model.PlaybackEnginePreference
 import com.example.data.model.PlaylistSummary
 import com.example.data.model.StorageBreakdown
 import com.example.data.model.SubtitlePreferences
@@ -66,6 +68,7 @@ class MainViewModel(
     private val downloadRepo = container.downloadRepository
     private val settingsStore = container.settingsDataStore
     val playerController = container.playerController
+    val ltShareManager = container.ltShareManager
     private val billingRepo = container.billingRepository
     private val aiRepo = container.aiVideoRepository
 
@@ -73,6 +76,7 @@ class MainViewModel(
         .stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
 
     val playerState: StateFlow<PlayerUiState> = playerController.state
+    val shareState = ltShareManager.state
 
     val videos: StateFlow<List<VideoItem>> = mediaRepo.videos
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -376,6 +380,24 @@ class MainViewModel(
 
     fun updateSubtitlePreferences(subPrefs: SubtitlePreferences) {
         viewModelScope.launch { settingsStore.updateSubtitlePreferences(subPrefs) }
+    }
+
+    fun updateCompatibilitySettings(
+        enginePreference: PlaybackEnginePreference? = null,
+        decoderPreference: DecoderPreference? = null,
+        preferredAudioLanguage: String? = null,
+        audioDelayMs: Long? = null,
+        audioBoostPercent: Int? = null
+    ) {
+        viewModelScope.launch {
+            settingsStore.updateCompatibilitySettings(
+                enginePreference = enginePreference,
+                decoderPreference = decoderPreference,
+                preferredAudioLanguage = preferredAudioLanguage,
+                audioDelayMs = audioDelayMs,
+                audioBoostPercent = audioBoostPercent
+            )
+        }
     }
 
     fun clearHistory() {

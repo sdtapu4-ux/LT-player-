@@ -31,6 +31,7 @@ import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PrivacyTip
 import androidx.compose.material.icons.rounded.RestartAlt
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.Subtitles
@@ -100,6 +101,8 @@ fun MeAndSettingsScreen(
     onOpenStorage: () -> Unit,
     onOpenDownloads: () -> Unit,
     onOpenFolders: () -> Unit,
+    onOpenLtShare: () -> Unit,
+    onOpenCompatibility: () -> Unit,
     onClearHistory: () -> Unit,
     onResetSettings: () -> Unit,
     modifier: Modifier = Modifier
@@ -208,6 +211,12 @@ fun MeAndSettingsScreen(
                     subtitle = "Manage active and completed downloads",
                     onClick = onOpenDownloads
                 )
+                SettingsActionRow(
+                    icon = Icons.Rounded.Share,
+                    title = "LT SHARE (QR Pairing & P2P)",
+                    subtitle = "Encrypted QR device pairing, Wi-Fi Direct, LAN & Bluetooth",
+                    onClick = onOpenLtShare
+                )
             }
         }
 
@@ -270,6 +279,12 @@ fun MeAndSettingsScreen(
                         }
                     }
                 }
+                SettingsActionRow(
+                    icon = Icons.Rounded.Code,
+                    title = "Playback Compatibility Engine",
+                    subtitle = "${settings.enginePreference.label} • ${settings.decoderPreference.label} • Boost ${settings.audioBoostPercent}%",
+                    onClick = onOpenCompatibility
+                )
                 SettingsActionRow(
                     icon = Icons.Rounded.Subtitles,
                     title = "Subtitle Preferences",
@@ -468,9 +483,11 @@ fun MeAndSettingsScreen(
                     "LT PLAYER Ultimate Edition v${BuildConfig.VERSION_NAME}\n\n" +
                         "Powered by:\n" +
                         "• AndroidX Media3 ExoPlayer & MediaSession (Apache 2.0)\n" +
+                        "• VideoLAN LibVLC Android SDK 3.7.7 (LGPL-2.1)\n" +
                         "• Jetpack Compose & Material 3 (Apache 2.0)\n" +
                         "• AndroidX Room & DataStore (Apache 2.0)\n" +
                         "• Coil Image & Video Frame Loader (Apache 2.0)\n" +
+                        "• CameraX, ML Kit Barcode & ZXing Core (Apache 2.0)\n" +
                         "• Firebase AI Logic SDK (Apache 2.0)\n" +
                         "• Google Play Billing Library (Android SDK)"
                 )

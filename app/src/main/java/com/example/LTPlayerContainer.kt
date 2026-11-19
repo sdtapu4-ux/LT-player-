@@ -9,6 +9,7 @@ import com.example.data.repository.MediaRepository
 import com.example.data.scanner.MediaScanner
 import com.example.download.DownloadRepository
 import com.example.player.PlayerController
+import com.example.share.LtShareManager
 
 class LTPlayerContainer(context: Context) {
     val appContext: Context = context.applicationContext
@@ -20,4 +21,5 @@ class LTPlayerContainer(context: Context) {
     val downloadRepository = DownloadRepository(appContext, database.downloadDao())
     val billingRepository = BillingRepository(appContext)
     val aiVideoRepository = AiVideoRepository()
+    val ltShareManager = LtShareManager(appContext, database.shareHistoryDao())
 }
