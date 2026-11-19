@@ -1,6 +1,10 @@
 package com.example.editor
 
+import android.content.Context
 import android.graphics.Color
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.net.Uri
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.BackgroundColorSpan
@@ -30,6 +34,12 @@ import kotlin.math.abs
 @OptIn(UnstableApi::class)
 object VideoEditorSpecBuilder {
 
+    fun evenDimension(px: Int): Int {
+        if (px <= 0) return 0
+        val clamped = px.coerceIn(128, 3840)
+        return if (clamped % 2 == 0) clamped else clamped - 1
+    }
+
     fun normalizeConfig(config: VideoEditorConfig): VideoEditorConfig {
         val dur = config.durationMs.coerceAtLeast(1_000L)
         val trimStart = config.trimStartMs.coerceIn(0L, (dur - 400L).coerceAtLeast(0L))
@@ -46,6 +56,10 @@ object VideoEditorSpecBuilder {
             (it / 90) * 90
         }
 
+        val w = if (config.resizeWidth > 0) evenDimension(config.resizeWidth) else 0
+        val h = if (config.resizeHeight > 0) evenDimension(config.resizeHeight) else 0
+        val fps = config.customFrameRate.let { if (it <= 0) 0 else it.coerceIn(1, 120) }
+
         return config.copy(
             durationMs = dur,
             trimStartMs = trimStart,
@@ -54,6 +68,9 @@ object VideoEditorSpecBuilder {
             cutEndMs = cutEnd,
             splitPositionMs = splitPos,
             rotationDegrees = normalizedRot,
+            resizeWidth = w,
+            resizeHeight = h,
+            customFrameRate = fps,
             cropInsetLeft = config.cropInsetLeft.coerceIn(0f, 0.42f),
             cropInsetRight = config.cropInsetRight.coerceIn(0f, 0.42f),
             cropInsetTop = config.cropInsetTop.coerceIn(0f, 0.42f),
@@ -62,8 +79,16 @@ object VideoEditorSpecBuilder {
             brightness = config.brightness.coerceIn(-0.6f, 0.6f),
             contrast = config.contrast.coerceIn(-0.6f, 0.6f),
             saturation = config.saturation.coerceIn(-100f, 100f),
+            overlayTextSizeScale = config.overlayTextSizeScale.coerceIn(0.4f, 1.5f),
+            subtitleDelayMs = config.subtitleDelayMs.coerceIn(-10_000L, 10_000L),
+            originalAudioVolume = config.originalAudioVolume.coerceIn(0f, 2.0f),
+            selectedAudioTrackIndex = config.selectedAudioTrackIndex.coerceAtLeast(0),
             backgroundMusicVolume = config.backgroundMusicVolume.coerceIn(0.05f, 1.0f)
         )
+    }
+
+    fun shouldRemoveOriginalAudio(config: VideoEditorConfig): Boolean {
+        return config.muteOriginalAudio || config.originalAudioVolume <= 0.01f
     }
 
     fun computeCropBounds(config: VideoEditorConfig): CropBounds {
@@ -137,6 +162,7 @@ object VideoEditorSpecBuilder {
         config: VideoEditorConfig,
         requiresUniformSequenceResolution: Boolean
     ): Int? {
+        if (config.resizeWidth > 0 && config.resizeHeight > 0) return null
         config.exportResolution.shortSidePx?.let { return it }
         if (!requiresUniformSequenceResolution) return null
         val short = minOf(config.sourceWidth, config.sourceHeight)
@@ -166,7 +192,6 @@ object VideoEditorSpecBuilder {
         if (safe.rotationDegrees != 0 || safe.flipHorizontal || safe.flipVertical) {
             val scaleX = if (safe.flipHorizontal) -1f else 1f
             val scaleY = if (safe.flipVertical) -1f else 1f
-            // OpenGL rotation is counter-clockwise; convert clockwise UI angle to CCW.
             val ccwDegrees = ((360 - safe.rotationDegrees) % 360).toFloat()
             effects += ScaleAndRotateTransformation.Builder()
                 .setScale(scaleX, scaleY)
@@ -200,21 +225,23 @@ object VideoEditorSpecBuilder {
             VideoFilterPreset.INVERT -> effects += RgbFilter.createInvertedFilter()
         }
 
-        // 4. Text Overlay & Subtitle Burn-in
+        // 4. Text Overlay (with custom scale) & Subtitle Burn-in (with timing offset)
         if (includeOverlays) {
             val overlays = mutableListOf<TextureOverlay>()
             if (safe.overlayText.isNotBlank()) {
                 overlays += buildStaticTextOverlay(
                     text = safe.overlayText.trim(),
                     textColor = safe.overlayTextColorHex.toInt(),
-                    anchorY = safe.overlayTextPosition.anchorY
+                    anchorY = safe.overlayTextPosition.anchorY,
+                    sizeScale = safe.overlayTextSizeScale
                 )
             }
             if (safe.subtitleEnabled && safe.subtitleCues.isNotEmpty()) {
                 overlays += buildDynamicSubtitleOverlay(
                     cues = safe.subtitleCues,
                     segmentStartOffsetMs = segmentStartOffsetMs,
-                    speedMultiplier = safe.speedMultiplier
+                    speedMultiplier = safe.speedMultiplier,
+                    subtitleDelayMs = safe.subtitleDelayMs
                 )
             }
             if (overlays.isNotEmpty()) {
@@ -222,18 +249,63 @@ object VideoEditorSpecBuilder {
             }
         }
 
-        // 5. Resolution Scaling
-        if (targetShortSidePx != null && targetShortSidePx > 0) {
+        // 5. Custom Resize OR Preset Resolution Scaling
+        if (safe.resizeWidth > 0 && safe.resizeHeight > 0) {
+            effects += Presentation.createForWidthAndHeight(
+                safe.resizeWidth,
+                safe.resizeHeight,
+                Presentation.LAYOUT_SCALE_TO_FIT
+            )
+        } else if (targetShortSidePx != null && targetShortSidePx > 0) {
             effects += Presentation.createForShortSide(targetShortSidePx)
         }
 
         return effects
     }
 
+    fun inspectSourceAudioTracks(context: Context, uri: Uri): List<SourceAudioTrackInfo> {
+        val extractor = MediaExtractor()
+        return try {
+            extractor.setDataSource(context, uri, null)
+            val result = mutableListOf<SourceAudioTrackInfo>()
+            var audioIdx = 0
+            for (i in 0 until extractor.trackCount) {
+                val fmt = extractor.getTrackFormat(i)
+                val mime = fmt.getString(MediaFormat.KEY_MIME) ?: continue
+                if (mime.startsWith("audio/")) {
+                    val lang = runCatching { fmt.getString(MediaFormat.KEY_LANGUAGE) }.getOrNull()
+                    val ch = if (fmt.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 2
+                    val sr = if (fmt.containsKey(MediaFormat.KEY_SAMPLE_RATE)) fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 0
+                    val langLabel = lang?.uppercase()?.takeIf { it != "UND" } ?: "Track ${audioIdx + 1}"
+                    val codecShort = mime.substringAfter('/').uppercase()
+                    val label = buildString {
+                        append(langLabel)
+                        append(" • $codecShort ${ch}ch")
+                        if (sr > 0) append(" (${sr / 1000}kHz)")
+                    }
+                    result += SourceAudioTrackInfo(
+                        indexInContainer = i,
+                        audioOrderIndex = audioIdx,
+                        label = label,
+                        language = lang,
+                        mimeType = mime
+                    )
+                    audioIdx++
+                }
+            }
+            result
+        } catch (_: Throwable) {
+            emptyList()
+        } finally {
+            runCatching { extractor.release() }
+        }
+    }
+
     private fun buildStaticTextOverlay(
         text: String,
         textColor: Int,
-        anchorY: Float
+        anchorY: Float,
+        sizeScale: Float
     ): TextOverlay {
         val spanned = SpannableString(" $text ").apply {
             setSpan(ForegroundColorSpan(textColor), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
@@ -243,7 +315,7 @@ object VideoEditorSpecBuilder {
                 length,
                 Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
             )
-            setSpan(RelativeSizeSpan(0.75f), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            setSpan(RelativeSizeSpan(sizeScale.coerceIn(0.4f, 1.5f)), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
         val settings = StaticOverlaySettings.Builder()
             .setBackgroundFrameAnchor(0f, anchorY)
@@ -255,7 +327,8 @@ object VideoEditorSpecBuilder {
     private fun buildDynamicSubtitleOverlay(
         cues: List<SubtitleCue>,
         segmentStartOffsetMs: Long,
-        speedMultiplier: Float
+        speedMultiplier: Float,
+        subtitleDelayMs: Long
     ): TextOverlay {
         val settings = StaticOverlaySettings.Builder()
             .setBackgroundFrameAnchor(0f, -0.78f)
@@ -266,7 +339,7 @@ object VideoEditorSpecBuilder {
             override fun getText(presentationTimeUs: Long): SpannableString {
                 val sourceTimeMs = segmentStartOffsetMs +
                     ((presentationTimeUs / 1000.0) * speedMultiplier.toDouble()).toLong()
-                val active = SubtitleParser.findCueAt(cues, sourceTimeMs, delayMs = 0L)
+                val active = SubtitleParser.findCueAt(cues, sourceTimeMs, delayMs = subtitleDelayMs)
                 if (active == null || active.text.isBlank()) {
                     return SpannableString(" ").apply {
                         setSpan(
@@ -322,7 +395,6 @@ object VideoEditorSpecBuilder {
     }
 
     private class SepiaRgbMatrix : RgbMatrix {
-        // OpenGL column-major 4x4 sepia transform
         private val matrix = floatArrayOf(
             0.393f, 0.349f, 0.272f, 0f,
             0.769f, 0.686f, 0.534f, 0f,

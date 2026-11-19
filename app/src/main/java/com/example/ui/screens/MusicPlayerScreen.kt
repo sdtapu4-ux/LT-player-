@@ -553,7 +553,10 @@ fun MusicPlayerScreen(
         VideoTimerBottomSheet(
             remainingSec = playerState.sleepTimerRemainingSec,
             totalSec = playerState.sleepTimerTotalSec,
+            endAction = playerState.sleepTimerEndAction,
+            onSelectEndAction = { playerController.setSleepTimerEndAction(it) },
             onStartMinutes = { mins -> playerController.startSleepTimer(mins) },
+            onStartHoursMinutes = { h, m -> playerController.startSleepTimer(h, m) },
             onResetTimer = { playerController.resetSleepTimer() },
             onCancelTimer = { playerController.cancelSleepTimer() },
             onDismiss = { showSleepTimerDialog = false }

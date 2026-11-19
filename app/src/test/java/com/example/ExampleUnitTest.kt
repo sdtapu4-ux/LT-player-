@@ -275,5 +275,87 @@ class ExampleUnitTest {
 
         val speedProvider = VideoEditorSpecBuilder.ConstantSpeedProvider(2.0f)
         assertEquals(2.0f, speedProvider.getSpeed(1_000_000L), 0.001f)
+
+        // New Editor upgrades: resize even dimensions, audio volume/removal, FPS, text size, subtitle delay
+        assertEquals(0, VideoEditorSpecBuilder.evenDimension(0))
+        assertEquals(128, VideoEditorSpecBuilder.evenDimension(60))
+        assertEquals(720, VideoEditorSpecBuilder.evenDimension(721))
+        assertTrue(VideoEditorSpecBuilder.shouldRemoveOriginalAudio(trimCfg.copy(muteOriginalAudio = true)))
+        assertTrue(VideoEditorSpecBuilder.shouldRemoveOriginalAudio(trimCfg.copy(originalAudioVolume = 0f)))
+        assertFalse(VideoEditorSpecBuilder.shouldRemoveOriginalAudio(trimCfg.copy(originalAudioVolume = 1.25f)))
+        val norm = VideoEditorSpecBuilder.normalizeConfig(
+            trimCfg.copy(
+                resizeWidth = 1081,
+                resizeHeight = 1920,
+                customFrameRate = 60,
+                originalAudioVolume = 1.5f,
+                overlayTextSizeScale = 1.4f,
+                subtitleDelayMs = -750L
+            )
+        )
+        assertEquals(1080, norm.resizeWidth)
+        assertEquals(1920, norm.resizeHeight)
+        assertEquals(60, norm.customFrameRate)
+        assertEquals(1.5f, norm.originalAudioVolume, 0.001f)
+        assertEquals(-750L, norm.subtitleDelayMs)
+    }
+
+    @Test
+    fun smartVideoDetector_resolvesSearchUpgradesHttpAndBlocksDrmManifests() {
+        assertEquals(
+            "https://www.google.com/search?q=open+source+videos",
+            com.example.browser.SmartVideoDetector.resolveNavigationTarget("open source videos")
+        )
+        assertEquals(
+            "https://archive.org/details/movies",
+            com.example.browser.SmartVideoDetector.resolveNavigationTarget("http://archive.org/details/movies")
+        )
+        assertEquals(
+            "https://commons.wikimedia.org",
+            com.example.browser.SmartVideoDetector.resolveNavigationTarget("commons.wikimedia.org")
+        )
+
+        assertTrue(com.example.browser.SmartVideoDetector.isDirectDownloadableMediaUrl("https://cdn.example.com/clip_1080p.mp4?token=1"))
+        assertTrue(com.example.browser.SmartVideoDetector.isDirectDownloadableMediaUrl("https://cdn.example.com/track.mp3"))
+        assertFalse(com.example.browser.SmartVideoDetector.isDirectDownloadableMediaUrl("https://cdn.example.com/playlist.m3u8"))
+        assertFalse(com.example.browser.SmartVideoDetector.isDirectDownloadableMediaUrl("https://cdn.example.com/manifest.mpd"))
+        assertFalse(com.example.browser.SmartVideoDetector.isDirectDownloadableMediaUrl("http://cdn.example.com/clip.mp4"))
+        assertFalse(com.example.browser.SmartVideoDetector.isDirectDownloadableMediaUrl("blob:https://example.com/123"))
+
+        assertEquals(
+            "1080p",
+            com.example.browser.SmartVideoDetector.inferQualityLabel("https://cdn.example.com/clip_1080p.mp4", "video/mp4")
+        )
+        assertEquals(
+            "Audio",
+            com.example.browser.SmartVideoDetector.inferQualityLabel("https://cdn.example.com/song.mp3", "audio/mpeg")
+        )
+        assertNull(
+            com.example.browser.SmartVideoDetector.inferQualityLabel("https://cdn.example.com/video.mp4", "video/mp4")
+        )
+
+        val domUrls = com.example.browser.SmartVideoDetector.parseDomScanResult(
+            "[\"https://cdn.example.com/a.mp4\",\"https://cdn.example.com/live.m3u8\",\"https://cdn.example.com/b.mp3\"]"
+        )
+        assertEquals(
+            listOf("https://cdn.example.com/a.mp4", "https://cdn.example.com/b.mp3"),
+            domUrls
+        )
+    }
+
+    @Test
+    fun downloadMediaCategory_classifiesVideosMusicAndOtherFiles() {
+        assertEquals(
+            com.example.data.model.DownloadMediaCategory.VIDEO,
+            com.example.data.model.DownloadMediaCategory.classify("movie.mkv", "video/x-matroska")
+        )
+        assertEquals(
+            com.example.data.model.DownloadMediaCategory.MUSIC,
+            com.example.data.model.DownloadMediaCategory.classify("track.flac", "audio/flac")
+        )
+        assertEquals(
+            com.example.data.model.DownloadMediaCategory.FILE,
+            com.example.data.model.DownloadMediaCategory.classify("manual.pdf", "application/pdf")
+        )
     }
 }

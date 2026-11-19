@@ -9,13 +9,22 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.SpeedParameters
+import androidx.media3.common.TrackGroup
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.GainProcessor
+import androidx.media3.common.util.Clock
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.exoplayer.trackselection.ExoTrackSelection
+import androidx.media3.exoplayer.trackselection.MappingTrackSelector
+import androidx.media3.exoplayer.trackselection.TrackSelector
 import androidx.media3.transformer.Composition
+import androidx.media3.transformer.DefaultDecoderFactory
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.Effects
+import androidx.media3.transformer.ExoPlayerAssetLoader
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
@@ -93,6 +102,7 @@ class VideoEditorEngine(private val context: Context) {
                         runTransformerAwait(
                             composition = composition,
                             outputPath = tempFile.absolutePath,
+                            selectedAudioTrackIndex = partConfig.selectedAudioTrackIndex,
                             onProgress = { pct ->
                                 val combined = (baseProgress + pct / 2).coerceIn(0, 98)
                                 _exportState.value = VideoExportState.Exporting(
@@ -103,7 +113,7 @@ class VideoEditorEngine(private val context: Context) {
                         )
                         _exportState.value = VideoExportState.Exporting(
                             progressPercent = if (idx == 0) 50 else 99,
-                            stageLabel = "Saving part ${idx + 1} to Gallery..."
+                            stageLabel = "Saving part ${idx + 1} to Edited Videos..."
                         )
                         val fileName = GalleryMediaSaver.sanitizeOutputFileName(safeConfig.title, suffix)
                         val saved = withContext(Dispatchers.IO) {
@@ -124,6 +134,7 @@ class VideoEditorEngine(private val context: Context) {
                     runTransformerAwait(
                         composition = composition,
                         outputPath = tempFile.absolutePath,
+                        selectedAudioTrackIndex = safeConfig.selectedAudioTrackIndex,
                         onProgress = { pct ->
                             _exportState.value = VideoExportState.Exporting(
                                 progressPercent = pct.coerceIn(0, 98),
@@ -133,7 +144,7 @@ class VideoEditorEngine(private val context: Context) {
                     )
                     _exportState.value = VideoExportState.Exporting(
                         progressPercent = 99,
-                        stageLabel = "Saving new copy to Gallery..."
+                        stageLabel = "Saving copy to Edited Videos..."
                     )
                     val suffix = when (safeConfig.timelineMode) {
                         VideoTimelineMode.TRIM -> "trim"
@@ -155,7 +166,8 @@ class VideoEditorEngine(private val context: Context) {
                     displayFileName = primary.displayName,
                     outputSizeBytes = savedResults.sumOf { it.sizeBytes },
                     savedFileCount = savedResults.size,
-                    additionalGalleryUris = savedResults.drop(1).map { it.contentUri.toString() }
+                    additionalGalleryUris = savedResults.drop(1).map { it.contentUri.toString() },
+                    outputFolderLabel = primary.relativeFolder
                 )
                 onSavedToGallery()
             } catch (t: Throwable) {
@@ -172,6 +184,7 @@ class VideoEditorEngine(private val context: Context) {
     }
 
     private fun buildComposition(config: VideoEditorConfig): Composition {
+        val removeOriginalAudio = VideoEditorSpecBuilder.shouldRemoveOriginalAudio(config)
         val isMultiClipSequence =
             (config.timelineMode == VideoTimelineMode.MERGE && config.mergeClips.size > 1) ||
                 (config.timelineMode == VideoTimelineMode.CUT &&
@@ -181,6 +194,15 @@ class VideoEditorEngine(private val context: Context) {
             config = config,
             requiresUniformSequenceResolution = isMultiClipSequence
         )
+
+        val videoAudioProcessors = mutableListOf<AudioProcessor>()
+        val origVol = config.originalAudioVolume.coerceIn(0f, 2.0f)
+        if (!removeOriginalAudio && kotlin.math.abs(origVol - 1.0f) > 0.02f) {
+            videoAudioProcessors += GainProcessor(object : GainProcessor.GainProvider {
+                override fun getGainFactorAtSamplePosition(samplePosition: Long, channelIndex: Int): Float = origVol
+                override fun isUnityUntil(samplePosition: Long, channelIndex: Int): Long = -1L
+            })
+        }
 
         val videoEditedItems: List<EditedMediaItem> = if (
             config.timelineMode == VideoTimelineMode.MERGE && config.mergeClips.isNotEmpty()
@@ -199,9 +221,11 @@ class VideoEditorEngine(private val context: Context) {
                 runningOffsetMs += clip.durationMs.coerceAtLeast(0L)
                 buildEditedMediaItem(
                     mediaItem = mediaItem,
+                    audioProcessors = videoAudioProcessors,
                     videoEffects = effectsList,
                     speed = config.speedMultiplier,
-                    removeAudio = config.muteOriginalAudio
+                    removeAudio = removeOriginalAudio,
+                    frameRate = config.customFrameRate
                 )
             }
         } else {
@@ -224,14 +248,16 @@ class VideoEditorEngine(private val context: Context) {
                 )
                 buildEditedMediaItem(
                     mediaItem = clipped,
+                    audioProcessors = videoAudioProcessors,
                     videoEffects = effectsList,
                     speed = config.speedMultiplier,
-                    removeAudio = config.muteOriginalAudio
+                    removeAudio = removeOriginalAudio,
+                    frameRate = config.customFrameRate
                 )
             }
         }
 
-        val primarySequence = if (config.muteOriginalAudio) {
+        val primarySequence = if (removeOriginalAudio) {
             EditedMediaItemSequence.withVideoFrom(videoEditedItems)
         } else {
             EditedMediaItemSequence.withAudioAndVideoFrom(videoEditedItems)
@@ -267,13 +293,18 @@ class VideoEditorEngine(private val context: Context) {
 
     private fun buildEditedMediaItem(
         mediaItem: MediaItem,
+        audioProcessors: List<AudioProcessor>,
         videoEffects: List<androidx.media3.common.Effect>,
         speed: Float,
-        removeAudio: Boolean
+        removeAudio: Boolean,
+        frameRate: Int
     ): EditedMediaItem {
         val builder = EditedMediaItem.Builder(mediaItem)
             .setRemoveAudio(removeAudio)
-            .setEffects(Effects(emptyList(), videoEffects))
+            .setEffects(Effects(audioProcessors, videoEffects))
+        if (frameRate > 0) {
+            builder.setFrameRate(frameRate)
+        }
         if (kotlin.math.abs(speed - 1.0f) > 0.01f) {
             builder.setSpeed(
                 SpeedParameters(
@@ -285,9 +316,48 @@ class VideoEditorEngine(private val context: Context) {
         return builder.build()
     }
 
+    private fun buildAudioTrackSelectorFactory(desiredAudioOrderIndex: Int): TrackSelector.Factory {
+        return TrackSelector.Factory { ctx ->
+            object : DefaultTrackSelector(ctx) {
+                override fun selectAudioTrack(
+                    mappedTrackInfo: MappingTrackSelector.MappedTrackInfo,
+                    rendererFormatSupports: Array<Array<IntArray>>,
+                    rendererMixedMimeTypeAdaptationSupports: IntArray,
+                    params: Parameters
+                ): android.util.Pair<ExoTrackSelection.Definition, Int>? {
+                    if (desiredAudioOrderIndex > 0) {
+                        val allAudioGroups = mutableListOf<Pair<Int, TrackGroup>>()
+                        for (r in 0 until mappedTrackInfo.rendererCount) {
+                            if (mappedTrackInfo.getRendererType(r) == C.TRACK_TYPE_AUDIO) {
+                                val groups = mappedTrackInfo.getTrackGroups(r)
+                                for (g in 0 until groups.length) {
+                                    allAudioGroups += r to groups.get(g)
+                                }
+                            }
+                        }
+                        val chosen = allAudioGroups.getOrNull(desiredAudioOrderIndex)
+                        if (chosen != null) {
+                            return android.util.Pair.create(
+                                ExoTrackSelection.Definition(chosen.second, 0),
+                                chosen.first
+                            )
+                        }
+                    }
+                    return super.selectAudioTrack(
+                        mappedTrackInfo,
+                        rendererFormatSupports,
+                        rendererMixedMimeTypeAdaptationSupports,
+                        params
+                    )
+                }
+            }
+        }
+    }
+
     private suspend fun runTransformerAwait(
         composition: Composition,
         outputPath: String,
+        selectedAudioTrackIndex: Int,
         onProgress: (Int) -> Unit
     ): ExportResult {
         return suspendCancellableCoroutine { cont ->
@@ -312,13 +382,29 @@ class VideoEditorEngine(private val context: Context) {
                 }
             }
 
-            val transformer = Transformer.Builder(context)
+            val transformerBuilder = Transformer.Builder(context)
                 .setVideoMimeType(MimeTypes.VIDEO_H264)
                 .setAudioMimeType(MimeTypes.AUDIO_AAC)
                 .setLooper(Looper.getMainLooper())
                 .addListener(listener)
-                .build()
 
+            if (selectedAudioTrackIndex > 0) {
+                val decoderFactory = DefaultDecoderFactory.Builder(context)
+                    .setEnableDecoderFallback(true)
+                    .build()
+                val assetLoaderFactory = ExoPlayerAssetLoader.Factory(
+                    context,
+                    decoderFactory,
+                    Clock.DEFAULT,
+                    DefaultMediaSourceFactory(context),
+                    buildAudioTrackSelectorFactory(selectedAudioTrackIndex),
+                    null,
+                    null
+                )
+                transformerBuilder.setAssetLoaderFactory(assetLoaderFactory)
+            }
+
+            val transformer = transformerBuilder.build()
             activeTransformer = transformer
 
             mainHandler.post {

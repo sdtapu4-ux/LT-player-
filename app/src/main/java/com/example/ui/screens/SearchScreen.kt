@@ -17,13 +17,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.MusicNote
-import androidx.compose.material.icons.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -273,7 +273,7 @@ fun SearchScreen(
                 if (category in listOf("All", "Playlists")) {
                     items(matchedPlaylists, key = { "p_${it.id}" }) { p ->
                         SearchResultRow(
-                            icon = Icons.Rounded.PlaylistPlay,
+                            icon = Icons.AutoMirrored.Rounded.PlaylistPlay,
                             title = p.name,
                             subtitle = "Playlist • ${p.itemCount} items",
                             onClick = onOpenPlaylists

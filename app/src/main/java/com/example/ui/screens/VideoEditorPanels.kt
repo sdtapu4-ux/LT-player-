@@ -62,9 +62,12 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import com.example.data.model.AudioItem
 import com.example.data.model.VideoItem
 import com.example.editor.MergeClipEntry
+import com.example.editor.SourceAudioTrackInfo
 import com.example.editor.TextOverlayPosition
 import com.example.editor.VideoCropPreset
 import com.example.editor.VideoEditorConfig
@@ -415,6 +418,59 @@ fun TransformToolPanel(
                 }
             }
         }
+
+        // Video Resize (Custom Dimensions)
+        Text("Video Resize (Custom Dimensions)", style = MaterialTheme.typography.titleSmall)
+        val resizePresets = listOf(
+            Triple("Auto", 0, 0),
+            Triple("1920×1080", 1920, 1080),
+            Triple("1280×720", 1280, 720),
+            Triple("1080×1920", 1080, 1920),
+            Triple("1080×1080", 1080, 1080),
+            Triple("854×480", 854, 480)
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            resizePresets.forEach { (label, w, h) ->
+                val selected = config.resizeWidth == w && config.resizeHeight == h
+                FilterChip(
+                    selected = selected,
+                    onClick = { onUpdateConfig(config.copy(resizeWidth = w, resizeHeight = h)) },
+                    label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = ElectricGreen,
+                        selectedLabelColor = Color(0xFF00210E)
+                    )
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = if (config.resizeWidth > 0) config.resizeWidth.toString() else "",
+                onValueChange = { raw ->
+                    val v = raw.filter { it.isDigit() }.take(4).toIntOrNull() ?: 0
+                    val fallbackH = if (v > 0 && config.resizeHeight == 0) config.sourceHeight else config.resizeHeight
+                    onUpdateConfig(config.copy(resizeWidth = v, resizeHeight = if (v == 0) 0 else fallbackH))
+                },
+                label = { Text("Width px") },
+                placeholder = { Text("Auto") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f).testTag("editor_resize_width_input")
+            )
+            OutlinedTextField(
+                value = if (config.resizeHeight > 0) config.resizeHeight.toString() else "",
+                onValueChange = { raw ->
+                    val v = raw.filter { it.isDigit() }.take(4).toIntOrNull() ?: 0
+                    val fallbackW = if (v > 0 && config.resizeWidth == 0) config.sourceWidth else config.resizeWidth
+                    onUpdateConfig(config.copy(resizeHeight = v, resizeWidth = if (v == 0) 0 else fallbackW))
+                },
+                label = { Text("Height px") },
+                placeholder = { Text("Auto") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f).testTag("editor_resize_height_input")
+            )
+        }
     }
 }
 
@@ -615,41 +671,95 @@ fun TextSubtitleToolPanel(
             }
         }
 
+        // Text Size Slider
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Text Size", style = MaterialTheme.typography.labelMedium)
+            Text(
+                "${(config.overlayTextSizeScale * 100).toInt()}%",
+                style = MaterialTheme.typography.labelMedium,
+                color = ElectricGreen
+            )
+        }
+        Slider(
+            value = config.overlayTextSizeScale,
+            onValueChange = { onUpdateConfig(config.copy(overlayTextSizeScale = it)) },
+            valueRange = 0.4f..1.5f,
+            colors = SliderDefaults.colors(thumbColor = ElectricGreen, activeTrackColor = ElectricGreen),
+            modifier = Modifier.testTag("editor_text_size_slider")
+        )
+
         Surface(
             shape = RoundedCornerShape(14.dp),
             color = MaterialTheme.colorScheme.surfaceVariant,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(
-                modifier = Modifier.padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Rounded.Subtitles, contentDescription = null, tint = PremiumBlue)
-                Spacer(Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Burn-In Subtitles (SRT / VTT / ASS)", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        text = if (config.subtitleCues.isNotEmpty()) {
-                            "${config.subtitleFileName ?: "Subtitle"} • ${config.subtitleCues.size} cues"
-                        } else {
-                            "No external subtitle file loaded"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Subtitles, contentDescription = null, tint = PremiumBlue)
+                    Spacer(Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Burn-In Subtitles (SRT / VTT / ASS)", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            text = if (config.subtitleCues.isNotEmpty()) {
+                                "${config.subtitleFileName ?: "Subtitle"} • ${config.subtitleCues.size} cues"
+                            } else {
+                                "No external subtitle file loaded"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (config.subtitleCues.isNotEmpty()) {
+                        Switch(
+                            checked = config.subtitleEnabled,
+                            onCheckedChange = { onUpdateConfig(config.copy(subtitleEnabled = it)) }
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    OutlinedButton(
+                        onClick = onPickSubtitleFile,
+                        modifier = Modifier.testTag("editor_import_subtitle_button")
+                    ) {
+                        Text("Import")
+                    }
                 }
                 if (config.subtitleCues.isNotEmpty()) {
-                    Switch(
-                        checked = config.subtitleEnabled,
-                        onCheckedChange = { onUpdateConfig(config.copy(subtitleEnabled = it)) }
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            String.format("Subtitle Timing Offset: %+.2fs", config.subtitleDelayMs / 1000f),
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextButton(onClick = { onUpdateConfig(config.copy(subtitleDelayMs = config.subtitleDelayMs - 250L)) }) {
+                                Text("-0.25s")
+                            }
+                            TextButton(onClick = { onUpdateConfig(config.copy(subtitleDelayMs = 0L)) }) {
+                                Text("Reset")
+                            }
+                            TextButton(onClick = { onUpdateConfig(config.copy(subtitleDelayMs = config.subtitleDelayMs + 250L)) }) {
+                                Text("+0.25s")
+                            }
+                        }
+                    }
+                    Slider(
+                        value = config.subtitleDelayMs.toFloat(),
+                        onValueChange = {
+                            val snapped = (it / 50f).toInt() * 50L
+                            onUpdateConfig(config.copy(subtitleDelayMs = snapped.coerceIn(-10_000L, 10_000L)))
+                        },
+                        valueRange = -5000f..5000f,
+                        colors = SliderDefaults.colors(thumbColor = PremiumBlue, activeTrackColor = PremiumBlue),
+                        modifier = Modifier.testTag("editor_subtitle_timing_slider")
                     )
-                    Spacer(Modifier.width(6.dp))
-                }
-                OutlinedButton(
-                    onClick = onPickSubtitleFile,
-                    modifier = Modifier.testTag("editor_import_subtitle_button")
-                ) {
-                    Text("Import")
                 }
             }
         }
@@ -660,6 +770,7 @@ fun TextSubtitleToolPanel(
 @Composable
 fun AudioExportToolPanel(
     config: VideoEditorConfig,
+    sourceAudioTracks: List<SourceAudioTrackInfo>,
     onUpdateConfig: (VideoEditorConfig) -> Unit,
     onOpenMusicLibraryPicker: () -> Unit,
     onPickMusicSaf: () -> Unit,
@@ -671,29 +782,69 @@ fun AudioExportToolPanel(
             color = MaterialTheme.colorScheme.surfaceVariant,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = if (config.muteOriginalAudio) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
-                    contentDescription = null,
-                    tint = if (config.muteOriginalAudio) CoralError else ElectricGreen
-                )
-                Spacer(Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Mute Original Video Audio", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        if (config.muteOriginalAudio) "Original audio track removed on export" else "Original audio track preserved",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = if (config.muteOriginalAudio) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
+                        contentDescription = null,
+                        tint = if (config.muteOriginalAudio) CoralError else ElectricGreen
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Remove Original Audio", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            if (config.muteOriginalAudio) "Original video audio track removed on export" else "Original audio track active",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = config.muteOriginalAudio,
+                        onCheckedChange = { onUpdateConfig(config.copy(muteOriginalAudio = it)) },
+                        modifier = Modifier.testTag("editor_mute_switch")
                     )
                 }
-                Switch(
-                    checked = config.muteOriginalAudio,
-                    onCheckedChange = { onUpdateConfig(config.copy(muteOriginalAudio = it)) },
-                    modifier = Modifier.testTag("editor_mute_switch")
-                )
+
+                if (!config.muteOriginalAudio) {
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Original Audio Volume", style = MaterialTheme.typography.labelSmall)
+                        Text(
+                            "${(config.originalAudioVolume * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = ElectricGreen,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Slider(
+                        value = config.originalAudioVolume,
+                        onValueChange = { onUpdateConfig(config.copy(originalAudioVolume = it)) },
+                        valueRange = 0f..2.0f,
+                        colors = SliderDefaults.colors(thumbColor = ElectricGreen, activeTrackColor = ElectricGreen),
+                        modifier = Modifier.testTag("editor_original_volume_slider")
+                    )
+
+                    if (sourceAudioTracks.isNotEmpty()) {
+                        Text("Audio Track Selection", style = MaterialTheme.typography.labelSmall)
+                        Spacer(Modifier.height(4.dp))
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            sourceAudioTracks.forEach { track ->
+                                FilterChip(
+                                    selected = config.selectedAudioTrackIndex == track.audioOrderIndex,
+                                    onClick = { onUpdateConfig(config.copy(selectedAudioTrackIndex = track.audioOrderIndex)) },
+                                    label = { Text(track.label, style = MaterialTheme.typography.labelSmall) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = PremiumBlue,
+                                        selectedLabelColor = Color.White
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -749,6 +900,22 @@ fun AudioExportToolPanel(
             }
         }
 
+        Text("Custom Frame Rate (FPS)", style = MaterialTheme.typography.titleSmall)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(0 to "Auto", 24 to "24 fps", 30 to "30 fps", 60 to "60 fps").forEach { (fps, label) ->
+                FilterChip(
+                    selected = config.customFrameRate == fps,
+                    onClick = { onUpdateConfig(config.copy(customFrameRate = fps)) },
+                    label = { Text(label) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = PremiumBlue,
+                        selectedLabelColor = Color.White
+                    ),
+                    modifier = Modifier.testTag("editor_fps_$fps")
+                )
+            }
+        }
+
         Text("Export Quality (Non-Destructive Copy)", style = MaterialTheme.typography.titleSmall)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             VideoExportResolution.entries.forEach { res ->
@@ -765,6 +932,18 @@ fun AudioExportToolPanel(
             }
         }
 
+        val exportSummary = if (config.resizeWidth > 0 && config.resizeHeight > 0) {
+            "${config.resizeWidth}×${config.resizeHeight}"
+        } else {
+            config.exportResolution.label
+        } + if (config.customFrameRate > 0) " • ${config.customFrameRate}fps" else ""
+
+        Text(
+            text = "Saves new file to Movies/LT PLAYER/Edited Videos (original stays untouched)",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
         Button(
             onClick = onExportClick,
             colors = ButtonDefaults.buttonColors(
@@ -778,7 +957,7 @@ fun AudioExportToolPanel(
         ) {
             Icon(Icons.Rounded.SaveAlt, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("Export & Save to Gallery (${config.exportResolution.label})", fontWeight = FontWeight.Bold)
+            Text("Export & Save ($exportSummary)", fontWeight = FontWeight.Bold)
         }
     }
 }

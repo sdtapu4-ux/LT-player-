@@ -15,11 +15,17 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.android.billingclient.api.ProductDetails
 import com.example.LTPlayerContainer
+import com.example.browser.BrowserSuggestion
+import com.example.browser.DetectedWebMedia
+import com.example.data.database.BrowserBookmarkEntity
+import com.example.data.database.BrowserHistoryEntity
+import com.example.data.database.EditorProjectEntity
 import com.example.data.database.PlaylistItemEntity
 import com.example.data.model.AppSettings
 import com.example.data.model.AspectRatioMode
 import com.example.data.model.AudioItem
 import com.example.data.model.DecoderPreference
+import com.example.data.model.DownloadMediaCategory
 import com.example.data.model.DownloadRecord
 import com.example.data.model.DownloadStatus
 import com.example.data.model.DuplicateMediaGroup
@@ -66,6 +72,8 @@ class MainViewModel(
 
     private val mediaRepo = container.mediaRepository
     private val downloadRepo = container.downloadRepository
+    private val browserRepo = container.browserRepository
+    private val editorProjectDao = container.editorProjectDao
     private val settingsStore = container.settingsDataStore
     val playerController = container.playerController
     val ltShareManager = container.ltShareManager
@@ -104,6 +112,15 @@ class MainViewModel(
     val safFolders = mediaRepo.safFolders
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val browserBookmarks: StateFlow<List<BrowserBookmarkEntity>> = browserRepo.bookmarks
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val browserHistory: StateFlow<List<BrowserHistoryEntity>> = browserRepo.history
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val editorProjects: StateFlow<List<EditorProjectEntity>> = editorProjectDao.observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val billingState: StateFlow<PremiumUiState> = billingRepo.state
 
     private val _installedGames = MutableStateFlow<List<InstalledGameInfo>>(emptyList())
@@ -139,7 +156,7 @@ class MainViewModel(
 
     init {
         refreshAll()
-        startDownloadSyncLoop()
+        viewModelScope.launch { downloadRepo.recoverInterruptedDownloads() }
         billingRepo.connectAndQuery()
     }
 
@@ -160,20 +177,6 @@ class MainViewModel(
                 .sumOf { it.totalBytes.coerceAtLeast(it.bytesDownloaded) }
             _storageBreakdown.value = mediaRepo.scanner.computeStorageBreakdown(vids, auds, dlBytes)
             _duplicateGroups.value = mediaRepo.findDuplicateVideos(vids)
-        }
-    }
-
-    private fun startDownloadSyncLoop() {
-        viewModelScope.launch {
-            while (isActive) {
-                val hasActive = downloads.value.any {
-                    it.status == DownloadStatus.RUNNING || it.status == DownloadStatus.PENDING
-                }
-                if (hasActive) {
-                    downloadRepo.syncProgressWithSystem()
-                }
-                delay(1200L)
-            }
         }
     }
 
@@ -318,13 +321,53 @@ class MainViewModel(
     }
 
     // Downloads
-    fun startDownload(url: String, customTitle: String?, usePublicFolder: Boolean) {
+    fun startDownload(
+        url: String,
+        customTitle: String?,
+        usePublicFolder: Boolean,
+        safTreeUri: String? = null
+    ) {
         viewModelScope.launch {
-            val result = downloadRepo.startDownload(url, customTitle, usePublicFolder)
+            val result = downloadRepo.enqueueDownload(
+                rawUrl = url,
+                customTitle = customTitle,
+                usePublicDownloadsFolder = usePublicFolder,
+                safTreeUri = safTreeUri
+            )
             result.onSuccess {
-                _statusBanner.value = "Download started."
+                _statusBanner.value = "Added to download queue."
             }.onFailure { err ->
                 _statusBanner.value = err.localizedMessage ?: "Download failed to start."
+            }
+        }
+    }
+
+    fun queueDetectedWebDownload(media: DetectedWebMedia) {
+        viewModelScope.launch {
+            val result = downloadRepo.enqueueDownload(
+                rawUrl = media.url,
+                customTitle = media.title,
+                mimeType = media.mimeType,
+                qualityLabel = media.qualityLabel,
+                knownTotalBytes = media.sizeBytes,
+                usePublicDownloadsFolder = true
+            )
+            result.onSuccess {
+                _statusBanner.value = "Downloading ${media.title}..."
+            }.onFailure { err ->
+                _statusBanner.value = err.localizedMessage ?: "Could not start download."
+            }
+        }
+    }
+
+    fun pauseDownload(id: Long) {
+        viewModelScope.launch { downloadRepo.pauseDownload(id) }
+    }
+
+    fun resumeDownload(id: Long) {
+        viewModelScope.launch {
+            downloadRepo.resumeDownload(id).onFailure {
+                _statusBanner.value = it.localizedMessage ?: "Resume failed."
             }
         }
     }
@@ -338,6 +381,115 @@ class MainViewModel(
             val res = downloadRepo.retryDownload(record)
             res.onFailure { _statusBanner.value = it.localizedMessage }
         }
+    }
+
+    fun deleteDownloadedFile(record: DownloadRecord) {
+        viewModelScope.launch {
+            downloadRepo.deleteDownloadedFile(record)
+            recomputeStorage()
+            _statusBanner.value = "Removed ${record.title}"
+        }
+    }
+
+    fun clearDownloadHistory() {
+        viewModelScope.launch {
+            downloadRepo.clearDownloadHistory()
+            _statusBanner.value = "Completed & failed download history cleared."
+        }
+    }
+
+    fun openDownloadedFile(record: DownloadRecord) {
+        val intent = downloadRepo.buildOpenIntent(record)
+        if (intent != null) {
+            runCatching { container.appContext.startActivity(intent) }
+                .onFailure { _statusBanner.value = "No app found to open ${record.title}." }
+        } else {
+            _statusBanner.value = "File URI unavailable."
+        }
+    }
+
+    fun shareDownloadedFile(record: DownloadRecord) {
+        val intent = downloadRepo.buildShareIntent(record)
+        if (intent != null) {
+            runCatching { container.appContext.startActivity(intent) }
+                .onFailure { _statusBanner.value = "Could not share ${record.title}." }
+        } else {
+            _statusBanner.value = "File URI unavailable for sharing."
+        }
+    }
+
+    fun playDownloadedMedia(
+        record: DownloadRecord,
+        onOpenVideoPlayer: () -> Unit,
+        onOpenMusicPlayer: () -> Unit
+    ) {
+        val dest = record.destinationUri ?: return
+        if (record.mediaCategory == DownloadMediaCategory.MUSIC) {
+            val audio = AudioItem(
+                id = record.id,
+                uriString = dest,
+                title = record.title.substringBeforeLast('.'),
+                artist = "Downloaded Music",
+                album = "LT Downloads",
+                albumId = 0L,
+                genre = "",
+                durationMs = 0L,
+                sizeBytes = record.totalBytes.coerceAtLeast(record.bytesDownloaded),
+                mimeType = record.mimeType,
+                folderName = "Downloads",
+                folderPath = record.localPath ?: "Downloads",
+                dateAddedSec = record.createdAt / 1000L
+            )
+            playAudio(audio, listOf(audio) + audioTracks.value)
+            onOpenMusicPlayer()
+        } else {
+            openPickedVideoUri(Uri.parse(dest), onOpenVideoPlayer)
+        }
+    }
+
+    // Browser
+    fun recordBrowserVisit(url: String, title: String, isIncognito: Boolean) {
+        viewModelScope.launch { browserRepo.recordVisit(url, title, isIncognito) }
+    }
+
+    fun toggleBrowserBookmark(url: String, title: String, isBookmarked: Boolean) {
+        viewModelScope.launch {
+            browserRepo.toggleBookmark(url, title, isBookmarked)
+            _statusBanner.value = if (isBookmarked) "Bookmark removed." else "Bookmarked $title."
+        }
+    }
+
+    fun deleteBrowserHistoryItem(id: Long) {
+        viewModelScope.launch { browserRepo.deleteHistoryItem(id) }
+    }
+
+    fun clearBrowserHistory() {
+        viewModelScope.launch {
+            browserRepo.clearHistory()
+            _statusBanner.value = "Browser history cleared."
+        }
+    }
+
+    fun buildBrowserSuggestions(query: String): List<BrowserSuggestion> =
+        browserRepo.buildSuggestions(query, browserBookmarks.value, browserHistory.value)
+
+    // Video Editor Draft Projects
+    fun saveEditorProject(name: String, sourceUriString: String, configJson: String) {
+        viewModelScope.launch {
+            editorProjectDao.insert(
+                EditorProjectEntity(
+                    name = name,
+                    sourceUriString = sourceUriString,
+                    configJson = configJson,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+            _statusBanner.value = "Editor project '$name' saved."
+        }
+    }
+
+    fun deleteEditorProject(id: Long) {
+        viewModelScope.launch { editorProjectDao.deleteById(id) }
     }
 
     // Settings

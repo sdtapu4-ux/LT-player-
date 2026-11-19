@@ -30,6 +30,7 @@ import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PrivacyTip
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Speed
@@ -104,6 +105,7 @@ fun MeAndSettingsScreen(
     onOpenLtShare: () -> Unit,
     onOpenCompatibility: () -> Unit,
     onOpenVideoEditor: () -> Unit,
+    onOpenBrowser: () -> Unit = {},
     onClearHistory: () -> Unit,
     onResetSettings: () -> Unit,
     modifier: Modifier = Modifier
@@ -211,6 +213,12 @@ fun MeAndSettingsScreen(
                     title = "Download Manager",
                     subtitle = "Manage active and completed downloads",
                     onClick = onOpenDownloads
+                )
+                SettingsActionRow(
+                    icon = Icons.Rounded.Public,
+                    title = "Smart Web Browser",
+                    subtitle = "Browse HTTPS sites & detect downloadable media",
+                    onClick = onOpenBrowser
                 )
                 SettingsActionRow(
                     icon = Icons.Rounded.Share,

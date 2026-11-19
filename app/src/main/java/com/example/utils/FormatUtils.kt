@@ -54,4 +54,17 @@ object FormatUtils {
             String.format(Locale.US, "%02d:%02d", minutes, seconds)
         }
     }
+
+    fun formatRelativeTime(timestampMs: Long): String {
+        val diff = (System.currentTimeMillis() - timestampMs).coerceAtLeast(0L)
+        val mins = diff / 60_000L
+        val hours = mins / 60L
+        val days = hours / 24L
+        return when {
+            mins < 1L -> "Just now"
+            mins < 60L -> "${mins}m ago"
+            hours < 24L -> "${hours}h ago"
+            else -> "${days}d ago"
+        }
+    }
 }

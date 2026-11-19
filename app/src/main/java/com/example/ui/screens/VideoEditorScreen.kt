@@ -24,18 +24,25 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.Redo
+import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.AutoFixHigh
+import androidx.compose.material.icons.rounded.BookmarkAdd
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.CropRotate
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.FolderSpecial
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -47,13 +54,16 @@ import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -79,6 +89,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
@@ -86,10 +97,12 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import com.example.data.database.EditorProjectEntity
 import com.example.data.model.AudioItem
 import com.example.data.model.VideoItem
 import com.example.data.scanner.SubtitleParser
 import com.example.editor.MergeClipEntry
+import com.example.editor.SourceAudioTrackInfo
 import com.example.editor.TextOverlayPosition
 import com.example.editor.VideoEditorConfig
 import com.example.editor.VideoEditorEngine
@@ -104,6 +117,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 private enum class EditorToolTab(val label: String, val icon: ImageVector) {
     TIMELINE("Trim/Cut", Icons.Rounded.ContentCut),
@@ -114,13 +129,17 @@ private enum class EditorToolTab(val label: String, val icon: ImageVector) {
     AUDIO_EXPORT("Audio/Save", Icons.Rounded.MusicNote)
 }
 
+@kotlin.OptIn(ExperimentalMaterial3Api::class)
 @OptIn(UnstableApi::class)
 @Composable
 fun VideoEditorScreen(
     initialVideoUri: String?,
     videos: List<VideoItem>,
     audioTracks: List<AudioItem>,
+    savedProjects: List<EditorProjectEntity> = emptyList(),
     subtitleEncoding: String,
+    onSaveProjectDraft: (name: String, sourceUriString: String, configJson: String) -> Unit = { _, _, _ -> },
+    onDeleteProjectDraft: (Long) -> Unit = {},
     onExportSavedToGallery: () -> Unit,
     onPlayExportedVideo: (String) -> Unit,
     onBack: () -> Unit
@@ -161,6 +180,35 @@ fun VideoEditorScreen(
         )
     }
 
+    var undoStack by remember { mutableStateOf<List<VideoEditorConfig>>(emptyList()) }
+    var redoStack by remember { mutableStateOf<List<VideoEditorConfig>>(emptyList()) }
+
+    fun updateConfigWithHistory(next: VideoEditorConfig) {
+        val prev = config
+        if (prev != null && prev != next) {
+            undoStack = (undoStack + prev).takeLast(30)
+            redoStack = emptyList()
+        }
+        config = next
+    }
+
+    fun performUndo() {
+        val current = config ?: return
+        val last = undoStack.lastOrNull() ?: return
+        undoStack = undoStack.dropLast(1)
+        redoStack = (redoStack + current).takeLast(30)
+        config = last
+    }
+
+    fun performRedo() {
+        val current = config ?: return
+        val next = redoStack.lastOrNull() ?: return
+        redoStack = redoStack.dropLast(1)
+        undoStack = (undoStack + current).takeLast(30)
+        config = next
+    }
+
+    var sourceAudioTracks by remember { mutableStateOf<List<SourceAudioTrackInfo>>(emptyList()) }
     var selectedTab by remember { mutableStateOf(EditorToolTab.TIMELINE) }
     var isPreviewPlaying by remember { mutableStateOf(false) }
     var previewPositionMs by remember { mutableLongStateOf(0L) }
@@ -169,6 +217,9 @@ fun VideoEditorScreen(
     var showChangeVideoPicker by remember { mutableStateOf(false) }
     var showMergeLibraryPicker by remember { mutableStateOf(false) }
     var showMusicLibraryPicker by remember { mutableStateOf(false) }
+    var showSaveProjectDialog by remember { mutableStateOf(false) }
+    var showLoadProjectsSheet by remember { mutableStateOf(false) }
+    var projectNameInput by remember { mutableStateOf("") }
 
     val previewPlayer = remember {
         ExoPlayer.Builder(context).build().apply {
@@ -186,6 +237,8 @@ fun VideoEditorScreen(
             val w = knownItem?.width?.takeIf { it > 0 } ?: probe.width.takeIf { it > 0 } ?: 1280
             val h = knownItem?.height?.takeIf { it > 0 } ?: probe.height.takeIf { it > 0 } ?: 720
             val uriStr = uri.toString()
+            undoStack = emptyList()
+            redoStack = emptyList()
             config = VideoEditorConfig(
                 sourceUriString = uriStr,
                 title = metaName,
@@ -205,7 +258,6 @@ fun VideoEditorScreen(
         }
     }
 
-    // If initialVideoUri wasn't in library list, probe its real duration/resolution via CodecInspector
     LaunchedEffect(initialVideoUri) {
         if (initialVideoUri != null && resolvedInitialVideo == null) {
             selectVideoIntoEditor(Uri.parse(initialVideoUri))
@@ -236,7 +288,7 @@ fun VideoEditorScreen(
                     resolutionLabel = if (probe.width > 0 && probe.height > 0) "${probe.width}x${probe.height}" else ""
                 )
                 config?.let { current ->
-                    config = current.copy(mergeClips = current.mergeClips + entry)
+                    updateConfigWithHistory(current.copy(mergeClips = current.mergeClips + entry))
                 }
             }
         }
@@ -252,10 +304,12 @@ fun VideoEditorScreen(
                 }
                 val name = queryDisplayName(context, uri)
                 config?.let { current ->
-                    config = current.copy(
-                        subtitleCues = cues,
-                        subtitleEnabled = cues.isNotEmpty(),
-                        subtitleFileName = name
+                    updateConfigWithHistory(
+                        current.copy(
+                            subtitleCues = cues,
+                            subtitleEnabled = cues.isNotEmpty(),
+                            subtitleFileName = name
+                        )
                     )
                 }
             }
@@ -268,9 +322,11 @@ fun VideoEditorScreen(
         if (uri != null) {
             val name = queryDisplayName(context, uri)
             config?.let { current ->
-                config = current.copy(
-                    backgroundMusicUriString = uri.toString(),
-                    backgroundMusicTitle = name
+                updateConfigWithHistory(
+                    current.copy(
+                        backgroundMusicUriString = uri.toString(),
+                        backgroundMusicTitle = name
+                    )
                 )
             }
         }
@@ -306,15 +362,17 @@ fun VideoEditorScreen(
 
     val currentConfig = config
 
-    // Load media source into ExoPlayer when sourceUriString changes
     LaunchedEffect(currentConfig?.sourceUriString) {
         val uriStr = currentConfig?.sourceUriString ?: return@LaunchedEffect
-        previewPlayer.setMediaItem(MediaItem.fromUri(Uri.parse(uriStr)))
+        val parsedUri = Uri.parse(uriStr)
+        sourceAudioTracks = withContext(Dispatchers.IO) {
+            VideoEditorSpecBuilder.inspectSourceAudioTracks(context, parsedUri)
+        }
+        previewPlayer.setMediaItem(MediaItem.fromUri(parsedUri))
         previewPlayer.prepare()
         previewPlayer.playWhenReady = false
     }
 
-    // Apply live Media3 visual effects + speed + mute
     val glEffectKey = currentConfig?.let {
         listOf(
             it.cropPreset, it.cropInsetLeft, it.cropInsetRight, it.cropInsetTop, it.cropInsetBottom,
@@ -339,10 +397,18 @@ fun VideoEditorScreen(
         }
     }
 
-    LaunchedEffect(currentConfig?.speedMultiplier, currentConfig?.muteOriginalAudio) {
+    LaunchedEffect(
+        currentConfig?.speedMultiplier,
+        currentConfig?.muteOriginalAudio,
+        currentConfig?.originalAudioVolume
+    ) {
         val cfg = config ?: return@LaunchedEffect
         previewPlayer.setPlaybackSpeed(cfg.speedMultiplier.coerceIn(0.25f, 3.0f))
-        previewPlayer.volume = if (cfg.muteOriginalAudio) 0f else 1f
+        previewPlayer.volume = if (VideoEditorSpecBuilder.shouldRemoveOriginalAudio(cfg)) {
+            0f
+        } else {
+            cfg.originalAudioVolume.coerceIn(0f, 1.0f)
+        }
     }
 
     LaunchedEffect(currentConfig?.sourceUriString) {
@@ -369,11 +435,11 @@ fun VideoEditorScreen(
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
-        // Editor Header
+        // Editor Header with Undo / Redo / Projects / Switch Video / Export
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .padding(horizontal = 6.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack, modifier = Modifier.testTag("editor_back_button")) {
@@ -388,6 +454,47 @@ fun VideoEditorScreen(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+            }
+            if (currentConfig != null) {
+                IconButton(
+                    onClick = { performUndo() },
+                    enabled = undoStack.isNotEmpty(),
+                    modifier = Modifier.testTag("editor_undo_button")
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.Undo,
+                        contentDescription = "Undo",
+                        tint = if (undoStack.isNotEmpty()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                    )
+                }
+                IconButton(
+                    onClick = { performRedo() },
+                    enabled = redoStack.isNotEmpty(),
+                    modifier = Modifier.testTag("editor_redo_button")
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.Redo,
+                        contentDescription = "Redo",
+                        tint = if (redoStack.isNotEmpty()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                    )
+                }
+                IconButton(
+                    onClick = {
+                        projectNameInput = "${currentConfig.title.substringBeforeLast('.')} Project"
+                        showSaveProjectDialog = true
+                    },
+                    modifier = Modifier.testTag("editor_save_project_button")
+                ) {
+                    Icon(Icons.Rounded.BookmarkAdd, contentDescription = "Save Project Draft", tint = PremiumBlue)
+                }
+            }
+            if (savedProjects.isNotEmpty()) {
+                IconButton(
+                    onClick = { showLoadProjectsSheet = true },
+                    modifier = Modifier.testTag("editor_load_projects_button")
+                ) {
+                    Icon(Icons.Rounded.FolderSpecial, contentDescription = "Saved Projects", tint = ElectricGreen)
+                }
             }
             IconButton(onClick = { showChangeVideoPicker = true }) {
                 Icon(Icons.Rounded.SwapHoriz, contentDescription = "Switch Video", tint = PremiumBlue)
@@ -433,7 +540,7 @@ fun VideoEditorScreen(
                         Icon(Icons.Rounded.VideoLibrary, contentDescription = null, tint = ElectricGreen, modifier = Modifier.size(48.dp))
                         Text("Open a Video to Edit", style = MaterialTheme.typography.titleLarge)
                         Text(
-                            "Trim, cut, split, merge, crop, rotate, apply filters, add text or subtitles, and export a new copy straight to Gallery.",
+                            "Trim, cut, split, merge, crop, resize, adjust FPS & audio, apply filters, add text or subtitles, and save drafts or export to Edited Videos.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center
@@ -480,7 +587,6 @@ fun VideoEditorScreen(
                     modifier = Modifier.fillMaxSize()
                 )
 
-                // Live Preview Text Overlay (burned permanently via Media3 TextOverlay during export)
                 if (currentConfig.overlayText.isNotBlank()) {
                     val align = when (currentConfig.overlayTextPosition) {
                         TextOverlayPosition.TOP -> Alignment.TopCenter
@@ -497,16 +603,19 @@ fun VideoEditorScreen(
                         Text(
                             text = currentConfig.overlayText.trim(),
                             color = Color(currentConfig.overlayTextColorHex),
-                            style = MaterialTheme.typography.titleSmall,
+                            fontSize = (18f * currentConfig.overlayTextSizeScale).coerceIn(10f, 30f).sp,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                         )
                     }
                 }
 
-                // Live Subtitle Preview Cue
                 if (currentConfig.subtitleEnabled && currentConfig.subtitleCues.isNotEmpty()) {
-                    val cue = SubtitleParser.findCueAt(currentConfig.subtitleCues, previewPositionMs, 0L)
+                    val cue = SubtitleParser.findCueAt(
+                        currentConfig.subtitleCues,
+                        previewPositionMs,
+                        delayMs = currentConfig.subtitleDelayMs
+                    )
                     if (cue != null) {
                         Surface(
                             shape = RoundedCornerShape(6.dp),
@@ -614,31 +723,32 @@ fun VideoEditorScreen(
                     when (selectedTab) {
                         EditorToolTab.TIMELINE -> TimelineToolPanel(
                             config = currentConfig,
-                            onUpdateConfig = { config = it },
+                            onUpdateConfig = { updateConfigWithHistory(it) },
                             onSeekPreviewMs = { ms -> previewPlayer.seekTo(ms) },
                             onOpenMergeLibraryPicker = { showMergeLibraryPicker = true },
                             onOpenMergeSafPicker = { safMergeClipPicker.launch(arrayOf("video/*")) }
                         )
                         EditorToolTab.TRANSFORM -> TransformToolPanel(
                             config = currentConfig,
-                            onUpdateConfig = { config = it }
+                            onUpdateConfig = { updateConfigWithHistory(it) }
                         )
                         EditorToolTab.SPEED -> SpeedToolPanel(
                             config = currentConfig,
-                            onUpdateConfig = { config = it }
+                            onUpdateConfig = { updateConfigWithHistory(it) }
                         )
                         EditorToolTab.COLOR -> ColorFilterToolPanel(
                             config = currentConfig,
-                            onUpdateConfig = { config = it }
+                            onUpdateConfig = { updateConfigWithHistory(it) }
                         )
                         EditorToolTab.TEXT_SUBS -> TextSubtitleToolPanel(
                             config = currentConfig,
-                            onUpdateConfig = { config = it },
+                            onUpdateConfig = { updateConfigWithHistory(it) },
                             onPickSubtitleFile = { safSubtitlePicker.launch(arrayOf("*/*")) }
                         )
                         EditorToolTab.AUDIO_EXPORT -> AudioExportToolPanel(
                             config = currentConfig,
-                            onUpdateConfig = { config = it },
+                            sourceAudioTracks = sourceAudioTracks,
+                            onUpdateConfig = { updateConfigWithHistory(it) },
                             onOpenMusicLibraryPicker = { showMusicLibraryPicker = true },
                             onPickMusicSaf = { safMusicPicker.launch(arrayOf("audio/*")) },
                             onExportClick = {
@@ -650,6 +760,88 @@ fun VideoEditorScreen(
                         )
                     }
                 }
+            }
+        }
+    }
+
+    if (showSaveProjectDialog && currentConfig != null) {
+        AlertDialog(
+            onDismissRequest = { showSaveProjectDialog = false },
+            title = { Text("Save Editor Project") },
+            text = {
+                OutlinedTextField(
+                    value = projectNameInput,
+                    onValueChange = { projectNameInput = it },
+                    label = { Text("Project Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val json = Json.encodeToString(currentConfig)
+                        onSaveProjectDraft(
+                            projectNameInput.ifBlank { currentConfig.title },
+                            currentConfig.sourceUriString,
+                            json
+                        )
+                        showSaveProjectDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ElectricGreen, contentColor = Color(0xFF00210E))
+                ) {
+                    Text("Save Draft")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSaveProjectDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showLoadProjectsSheet) {
+        ModalBottomSheet(onDismissRequest = { showLoadProjectsSheet = false }) {
+            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+                Text("Saved Editor Projects", style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(10.dp))
+                LazyColumn(modifier = Modifier.height(320.dp)) {
+                    items(savedProjects, key = { it.id }) { proj ->
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                                .clickable {
+                                    runCatching {
+                                        val loaded = Json.decodeFromString<VideoEditorConfig>(proj.configJson)
+                                        undoStack = emptyList()
+                                        redoStack = emptyList()
+                                        config = loaded
+                                    }
+                                    showLoadProjectsSheet = false
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(proj.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(
+                                        FormatUtils.formatRelativeTime(proj.updatedAt),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(onClick = { onDeleteProjectDraft(proj.id) }) {
+                                    Icon(Icons.Rounded.Delete, contentDescription = "Delete Draft", tint = CoralError)
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
             }
         }
     }
@@ -670,7 +862,7 @@ fun VideoEditorScreen(
             onSelectVideo = { v ->
                 config?.let { cur ->
                     val entry = MergeClipEntry(v.uriString, v.title, v.durationMs, v.resolutionLabel)
-                    config = cur.copy(mergeClips = cur.mergeClips + entry)
+                    updateConfigWithHistory(cur.copy(mergeClips = cur.mergeClips + entry))
                 }
             },
             onDismiss = { showMergeLibraryPicker = false }
@@ -682,9 +874,11 @@ fun VideoEditorScreen(
             tracks = audioTracks,
             onSelectTrack = { track ->
                 config?.let { cur ->
-                    config = cur.copy(
-                        backgroundMusicUriString = track.uriString,
-                        backgroundMusicTitle = track.title
+                    updateConfigWithHistory(
+                        cur.copy(
+                            backgroundMusicUriString = track.uriString,
+                            backgroundMusicTitle = track.title
+                        )
                     )
                 }
             },
@@ -728,14 +922,14 @@ fun VideoEditorScreen(
             AlertDialog(
                 onDismissRequest = { editorEngine.resetExportState() },
                 icon = { Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = ElectricGreen, modifier = Modifier.size(36.dp)) },
-                title = { Text("Saved to Gallery") },
+                title = { Text("Saved to Edited Videos") },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
                             if (st.savedFileCount > 1) {
-                                "${st.savedFileCount} split videos saved to Movies/LT PLAYER!"
+                                "${st.savedFileCount} split videos saved to ${st.outputFolderLabel}!"
                             } else {
-                                "Saved new video copy to Movies/LT PLAYER:"
+                                "Saved new video copy to ${st.outputFolderLabel}:"
                             },
                             style = MaterialTheme.typography.bodyMedium
                         )

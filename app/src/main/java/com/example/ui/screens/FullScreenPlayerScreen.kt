@@ -110,6 +110,7 @@ import com.example.data.model.AppSettings
 import com.example.data.model.AspectRatioMode
 import com.example.data.model.DecoderPreference
 import com.example.data.model.PlaybackEnginePreference
+import com.example.data.model.SleepTimerEndAction
 import com.example.data.model.SubtitlePreferences
 import com.example.data.scanner.SubtitleParser
 import com.example.player.PlayerController
@@ -513,7 +514,11 @@ fun FullScreenPlayerScreen(
                 ) {
                     Icon(Icons.Rounded.Timer, contentDescription = null, tint = ElectricGreen, modifier = Modifier.size(16.dp))
                     Text(
-                        text = "Sleep timer ended • Video auto-paused",
+                        text = if (playerState.sleepTimerLastEndAction == SleepTimerEndAction.STOP_PLAYBACK) {
+                            "Sleep timer ended • Playback stopped"
+                        } else {
+                            "Sleep timer ended • Video auto-paused"
+                        },
                         style = MaterialTheme.typography.labelMedium,
                         color = Color.White,
                         modifier = Modifier.weight(1f, fill = false)
@@ -1176,7 +1181,10 @@ fun FullScreenPlayerScreen(
         VideoTimerBottomSheet(
             remainingSec = playerState.sleepTimerRemainingSec,
             totalSec = playerState.sleepTimerTotalSec,
+            endAction = playerState.sleepTimerEndAction,
+            onSelectEndAction = { playerController.setSleepTimerEndAction(it) },
             onStartMinutes = { mins -> playerController.startSleepTimer(mins) },
+            onStartHoursMinutes = { h, m -> playerController.startSleepTimer(h, m) },
             onResetTimer = { playerController.resetSleepTimer() },
             onCancelTimer = { playerController.cancelSleepTimer() },
             onDismiss = { showTimerSheet = false }

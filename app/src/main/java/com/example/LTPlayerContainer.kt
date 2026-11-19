@@ -5,6 +5,7 @@ import com.example.data.database.LTPlayerDatabase
 import com.example.data.preferences.SettingsDataStore
 import com.example.data.repository.AiVideoRepository
 import com.example.data.repository.BillingRepository
+import com.example.data.repository.BrowserRepository
 import com.example.data.repository.MediaRepository
 import com.example.data.scanner.MediaScanner
 import com.example.download.DownloadRepository
@@ -19,6 +20,8 @@ class LTPlayerContainer(context: Context) {
     val mediaRepository = MediaRepository(appContext, database, mediaScanner)
     val playerController = PlayerController(appContext, mediaRepository)
     val downloadRepository = DownloadRepository(appContext, database.downloadDao())
+    val browserRepository = BrowserRepository(database.browserBookmarkDao(), database.browserHistoryDao())
+    val editorProjectDao = database.editorProjectDao()
     val billingRepository = BillingRepository(appContext)
     val aiVideoRepository = AiVideoRepository()
     val ltShareManager = LtShareManager(appContext, database.shareHistoryDao())

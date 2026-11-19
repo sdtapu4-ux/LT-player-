@@ -92,6 +92,7 @@ import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.SplashScreen
 import com.example.ui.screens.StorageManagementScreen
 import com.example.ui.screens.VideoEditorScreen
+import com.example.ui.screens.WebBrowserScreen
 import com.example.ui.screens.share.LtShareConnectedDeviceScreen
 import com.example.ui.screens.share.LtShareGenerateQrScreen
 import com.example.ui.screens.share.LtShareHubScreen
@@ -118,6 +119,7 @@ import kotlinx.serialization.Serializable
 @Serializable data object RoutePlaylists
 @Serializable data object RouteSearch
 @Serializable data object RouteDownloads
+@Serializable data object RouteBrowser
 @Serializable data object RouteStorage
 @Serializable data object RoutePremium
 @Serializable data object RoutePlaybackCompatibilitySettings
@@ -165,6 +167,9 @@ fun LTAppNavigation(
     val aiState by viewModel.aiState.collectAsStateWithLifecycle()
     val statusBanner by viewModel.statusBanner.collectAsStateWithLifecycle()
     val shareState by viewModel.shareState.collectAsStateWithLifecycle()
+    val browserBookmarks by viewModel.browserBookmarks.collectAsStateWithLifecycle()
+    val browserHistory by viewModel.browserHistory.collectAsStateWithLifecycle()
+    val editorProjects by viewModel.editorProjects.collectAsStateWithLifecycle()
 
     var codecInspectReport by remember { mutableStateOf<CodecSupportReport?>(null) }
     var compatFileInspectReport by remember { mutableStateOf<CodecSupportReport?>(null) }
@@ -479,7 +484,8 @@ fun LTAppNavigation(
                                 },
                                 onEditVideo = { video ->
                                     navController.navigate(RouteVideoEditor(initialVideoUri = video.uriString))
-                                }
+                                },
+                                onOpenBrowser = { navController.navigate(RouteBrowser) }
                             )
                         }
 
@@ -547,6 +553,7 @@ fun LTAppNavigation(
                                 onOpenVideoEditor = {
                                     navController.navigate(RouteVideoEditor(initialVideoUri = null))
                                 },
+                                onOpenBrowser = { navController.navigate(RouteBrowser) },
                                 onClearHistory = { viewModel.clearHistory() },
                                 onResetSettings = { viewModel.resetSettings() }
                             )
@@ -614,10 +621,15 @@ fun LTAppNavigation(
                                 initialVideoUri = args.initialVideoUri,
                                 videos = videos,
                                 audioTracks = audioTracks,
+                                savedProjects = editorProjects,
                                 subtitleEncoding = settings.subtitlePrefs.encoding,
+                                onSaveProjectDraft = { name, src, json ->
+                                    viewModel.saveEditorProject(name, src, json)
+                                },
+                                onDeleteProjectDraft = { viewModel.deleteEditorProject(it) },
                                 onExportSavedToGallery = {
                                     viewModel.refreshAll()
-                                    viewModel.showMessage("Exported video saved to Gallery (Movies/LT PLAYER).")
+                                    viewModel.showMessage("Exported video saved to Gallery (Movies/LT PLAYER/Edited Videos).")
                                 },
                                 onPlayExportedVideo = { uriStr ->
                                     viewModel.openPickedVideoUri(Uri.parse(uriStr)) {
@@ -698,9 +710,46 @@ fun LTAppNavigation(
                         composable<RouteDownloads> {
                             DownloadsScreen(
                                 downloads = downloads,
-                                onStartDownload = { url, title, pub -> viewModel.startDownload(url, title, pub) },
+                                onStartDownload = { url, title, pub, safTree ->
+                                    viewModel.startDownload(url, title, pub, safTree)
+                                },
+                                onPauseDownload = { viewModel.pauseDownload(it) },
+                                onResumeDownload = { viewModel.resumeDownload(it) },
                                 onCancelDownload = { viewModel.cancelDownload(it) },
                                 onRetryDownload = { viewModel.retryDownload(it) },
+                                onPlayDownloadedMedia = { record ->
+                                    viewModel.playDownloadedMedia(
+                                        record = record,
+                                        onOpenVideoPlayer = { navController.navigate(RouteFullPlayer) },
+                                        onOpenMusicPlayer = { navigateTopTab(RouteMusic) }
+                                    )
+                                },
+                                onOpenDownloadedFile = { viewModel.openDownloadedFile(it) },
+                                onShareDownloadedFile = { viewModel.shareDownloadedFile(it) },
+                                onDeleteDownloadedFile = { viewModel.deleteDownloadedFile(it) },
+                                onClearHistory = { viewModel.clearDownloadHistory() },
+                                onOpenBrowser = { navController.navigate(RouteBrowser) },
+                                onBack = { navController.popBackStack() }
+                            )
+                        }
+
+                        composable<RouteBrowser> {
+                            WebBrowserScreen(
+                                bookmarks = browserBookmarks,
+                                history = browserHistory,
+                                buildSuggestions = { q -> viewModel.buildBrowserSuggestions(q) },
+                                onRecordVisit = { url, title, isIncog ->
+                                    viewModel.recordBrowserVisit(url, title, isIncog)
+                                },
+                                onToggleBookmark = { url, title, isBookmarked ->
+                                    viewModel.toggleBrowserBookmark(url, title, isBookmarked)
+                                },
+                                onDeleteHistoryItem = { viewModel.deleteBrowserHistoryItem(it) },
+                                onClearHistory = { viewModel.clearBrowserHistory() },
+                                onQueueDownload = { media ->
+                                    viewModel.queueDetectedWebDownload(media)
+                                },
+                                onOpenDownloads = { navController.navigate(RouteDownloads) },
                                 onBack = { navController.popBackStack() }
                             )
                         }

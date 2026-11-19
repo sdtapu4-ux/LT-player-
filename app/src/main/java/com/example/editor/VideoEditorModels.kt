@@ -1,7 +1,9 @@
 package com.example.editor
 
 import com.example.data.model.SubtitleCue
+import kotlinx.serialization.Serializable
 
+@Serializable
 enum class VideoTimelineMode(val label: String) {
     TRIM("Trim"),
     CUT("Cut"),
@@ -9,12 +11,14 @@ enum class VideoTimelineMode(val label: String) {
     MERGE("Merge")
 }
 
+@Serializable
 enum class VideoSplitExportChoice(val label: String) {
     PART_1("Part 1"),
     PART_2("Part 2"),
     BOTH("Both Parts")
 }
 
+@Serializable
 enum class VideoFilterPreset(val label: String) {
     NONE("Original"),
     VIVID("Vivid"),
@@ -25,6 +29,7 @@ enum class VideoFilterPreset(val label: String) {
     INVERT("Invert")
 }
 
+@Serializable
 enum class VideoCropPreset(val label: String, val targetAspect: Float?) {
     ORIGINAL("Free", null),
     RATIO_16_9("16:9", 16f / 9f),
@@ -33,12 +38,14 @@ enum class VideoCropPreset(val label: String, val targetAspect: Float?) {
     RATIO_9_16("9:16", 9f / 16f)
 }
 
+@Serializable
 enum class TextOverlayPosition(val label: String, val anchorY: Float) {
     TOP("Top", 0.78f),
     CENTER("Center", 0f),
     BOTTOM("Bottom", -0.68f)
 }
 
+@Serializable
 enum class VideoExportResolution(val shortSidePx: Int?, val label: String) {
     ORIGINAL(null, "Original"),
     P360(360, "360p"),
@@ -47,6 +54,7 @@ enum class VideoExportResolution(val shortSidePx: Int?, val label: String) {
     P1080(1080, "1080p")
 }
 
+@Serializable
 data class MergeClipEntry(
     val uriString: String,
     val title: String,
@@ -64,6 +72,15 @@ data class CropBounds(
         get() = left <= -0.995f && right >= 0.995f && bottom <= -0.995f && top >= 0.995f
 }
 
+data class SourceAudioTrackInfo(
+    val indexInContainer: Int,
+    val audioOrderIndex: Int,
+    val label: String,
+    val language: String?,
+    val mimeType: String
+)
+
+@Serializable
 data class VideoEditorConfig(
     val sourceUriString: String,
     val title: String,
@@ -86,6 +103,9 @@ data class VideoEditorConfig(
     val rotationDegrees: Int = 0,
     val flipHorizontal: Boolean = false,
     val flipVertical: Boolean = false,
+    val resizeWidth: Int = 0,
+    val resizeHeight: Int = 0,
+    val customFrameRate: Int = 0,
     val speedMultiplier: Float = 1.0f,
     val brightness: Float = 0f,
     val contrast: Float = 0f,
@@ -94,10 +114,14 @@ data class VideoEditorConfig(
     val overlayText: String = "",
     val overlayTextColorHex: Long = 0xFFFFFFFFL,
     val overlayTextPosition: TextOverlayPosition = TextOverlayPosition.BOTTOM,
+    val overlayTextSizeScale: Float = 0.75f,
     val subtitleCues: List<SubtitleCue> = emptyList(),
     val subtitleEnabled: Boolean = true,
     val subtitleFileName: String? = null,
+    val subtitleDelayMs: Long = 0L,
     val muteOriginalAudio: Boolean = false,
+    val originalAudioVolume: Float = 1.0f,
+    val selectedAudioTrackIndex: Int = 0,
     val backgroundMusicUriString: String? = null,
     val backgroundMusicTitle: String? = null,
     val backgroundMusicVolume: Float = 0.65f,
@@ -116,7 +140,8 @@ sealed interface VideoExportState {
         val displayFileName: String,
         val outputSizeBytes: Long,
         val savedFileCount: Int = 1,
-        val additionalGalleryUris: List<String> = emptyList()
+        val additionalGalleryUris: List<String> = emptyList(),
+        val outputFolderLabel: String = GalleryMediaSaver.EDITED_RELATIVE_PATH
     ) : VideoExportState
 
     data class Error(val message: String) : VideoExportState

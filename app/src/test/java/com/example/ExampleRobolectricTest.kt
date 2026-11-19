@@ -296,6 +296,91 @@ class ExampleRobolectricTest {
         pc.cancelSleepTimer()
         assertEquals(null, pc.state.value.sleepTimerRemainingSec)
         assertEquals(null, pc.state.value.sleepTimerTotalSec)
+
+        // Hours + minutes + end action selection
+        pc.setSleepTimerEndAction(com.example.data.model.SleepTimerEndAction.STOP_PLAYBACK)
+        assertEquals(com.example.data.model.SleepTimerEndAction.STOP_PLAYBACK, pc.state.value.sleepTimerEndAction)
+        pc.startSleepTimer(hours = 1, minutes = 30)
+        assertEquals(5400, pc.state.value.sleepTimerTotalSec)
+        assertTrue((pc.state.value.sleepTimerRemainingSec ?: 0) in 5398..5400)
+        pc.cancelSleepTimer()
         pc.release()
+    }
+
+    @Test
+    fun browserRepository_persistsBookmarksHistoryExcludesIncognitoAndSuggestsMatches() = runTest {
+        val repo = com.example.data.repository.BrowserRepository(
+            db.browserBookmarkDao(),
+            db.browserHistoryDao()
+        )
+        repo.recordVisit("https://archive.org/details/movies", "Internet Archive Movies", isIncognito = false)
+        repo.recordVisit("https://secret.example.com", "Secret Page", isIncognito = true)
+        val history = repo.history.first()
+        assertEquals(1, history.size)
+        assertEquals("https://archive.org/details/movies", history[0].url)
+
+        repo.toggleBookmark("https://commons.wikimedia.org", "Wikimedia Commons", isCurrentlyBookmarked = false)
+        val bookmarks = repo.bookmarks.first()
+        assertEquals(1, bookmarks.size)
+        assertEquals("Wikimedia Commons", bookmarks[0].title)
+
+        val suggestions = repo.buildSuggestions("wiki", bookmarks, history)
+        assertEquals(1, suggestions.size)
+        assertTrue(suggestions[0].isBookmark)
+
+        repo.clearHistory()
+        assertTrue(repo.history.first().isEmpty())
+    }
+
+    @Test
+    fun downloadRepository_enqueuesPausesResumesAndClearsCompletedHistory() = runTest {
+        val repo = DownloadRepository(context, db.downloadDao())
+        val id = repo.enqueueDownload(
+            rawUrl = "https://cdn.example.com/sample_720p.mp4",
+            customTitle = "Sample Video",
+            mimeType = "video/mp4",
+            qualityLabel = "720p",
+            knownTotalBytes = 4096L,
+            usePublicDownloadsFolder = true,
+            safTreeUri = "content://com.android.externalstorage.documents/tree/primary%3AMovies"
+        ).getOrThrow()
+
+        var list = repo.downloadsFlow.first()
+        assertEquals(1, list.size)
+        assertEquals("720p", list[0].qualityLabel)
+        assertEquals(com.example.data.model.DownloadMediaCategory.VIDEO, list[0].mediaCategory)
+
+        repo.pauseDownload(id)
+        list = repo.downloadsFlow.first()
+        assertEquals(com.example.data.model.DownloadStatus.PAUSED, list[0].status)
+
+        repo.resumeDownload(id)
+        list = repo.downloadsFlow.first()
+        assertEquals(com.example.data.model.DownloadStatus.PENDING, list[0].status)
+
+        // Mark completed and clear history
+        val entity = db.downloadDao().getById(id)!!
+        db.downloadDao().update(entity.copy(status = com.example.data.model.DownloadStatus.SUCCESSFUL.name))
+        repo.clearDownloadHistory()
+        assertTrue(repo.downloadsFlow.first().isEmpty())
+    }
+
+    @Test
+    fun editorProjectDao_savesAndDeletesProjectDrafts() = runTest {
+        val dao = db.editorProjectDao()
+        val id = dao.insert(
+            com.example.data.database.EditorProjectEntity(
+                name = "Trailer Cut",
+                sourceUriString = "content://media/external/video/media/9",
+                configJson = "{\"title\":\"Trailer\"}",
+                updatedAt = 500L
+            )
+        )
+        val projects = dao.observeAll().first()
+        assertEquals(1, projects.size)
+        assertEquals("Trailer Cut", projects[0].name)
+
+        dao.deleteById(id)
+        assertTrue(dao.observeAll().first().isEmpty())
     }
 }

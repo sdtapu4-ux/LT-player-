@@ -20,6 +20,9 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
+import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
@@ -28,13 +31,11 @@ import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.PlaylistAdd
-import androidx.compose.material.icons.rounded.PlaylistPlay
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Storage
-import androidx.compose.material.icons.rounded.ViewList
 import androidx.compose.material.icons.rounded.WorkspacePremium
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -108,6 +109,7 @@ fun HomeVideoDashboardScreen(
     onOpenLtShare: () -> Unit,
     onInspectCodec: (VideoItem) -> Unit,
     onEditVideo: (VideoItem) -> Unit,
+    onOpenBrowser: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var isGridLayout by remember { mutableStateOf(false) }
@@ -153,6 +155,7 @@ fun HomeVideoDashboardScreen(
                     onOpenPremium = onOpenPremium,
                     onOpenStorage = onOpenStorage,
                     onOpenSearch = onOpenSearch,
+                    onOpenBrowser = onOpenBrowser,
                     onOpenDownloads = onOpenDownloads,
                     onOpenLtShare = onOpenLtShare,
                     onOpenSettings = onOpenSettings
@@ -344,7 +347,7 @@ fun HomeVideoDashboardScreen(
                             modifier = Modifier.padding(14.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Rounded.PlaylistPlay, contentDescription = null, tint = ElectricGreen)
+                            Icon(Icons.AutoMirrored.Rounded.PlaylistPlay, contentDescription = null, tint = ElectricGreen)
                             Spacer(Modifier.width(10.dp))
                             Text(
                                 "Create custom video & music playlists",
@@ -497,7 +500,7 @@ fun HomeVideoDashboardScreen(
                             modifier = Modifier.testTag("toggle_grid_list_button")
                         ) {
                             Icon(
-                                imageVector = if (isGridLayout) Icons.Rounded.ViewList else Icons.Rounded.GridView,
+                                imageVector = if (isGridLayout) Icons.AutoMirrored.Rounded.ViewList else Icons.Rounded.GridView,
                                 contentDescription = "Toggle Grid or List"
                             )
                         }
@@ -566,6 +569,7 @@ private fun DashboardTopHeader(
     onOpenPremium: () -> Unit,
     onOpenStorage: () -> Unit,
     onOpenSearch: () -> Unit,
+    onOpenBrowser: () -> Unit,
     onOpenDownloads: () -> Unit,
     onOpenLtShare: () -> Unit,
     onOpenSettings: () -> Unit
@@ -614,6 +618,12 @@ private fun DashboardTopHeader(
                     modifier = Modifier.testTag("header_search_button")
                 ) {
                     Icon(Icons.Rounded.Search, contentDescription = "Global Search")
+                }
+                IconButton(
+                    onClick = onOpenBrowser,
+                    modifier = Modifier.testTag("header_browser_button")
+                ) {
+                    Icon(Icons.Rounded.Public, contentDescription = "Web Browser", tint = PremiumBlue)
                 }
                 IconButton(
                     onClick = onOpenLtShare,
@@ -1020,7 +1030,7 @@ private fun VideoOverflowMenu(
         )
         DropdownMenuItem(
             text = { Text("Add to Playlist") },
-            leadingIcon = { Icon(Icons.Rounded.PlaylistAdd, contentDescription = null) },
+            leadingIcon = { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, contentDescription = null) },
             onClick = {
                 onDismiss()
                 onAddToPlaylist()

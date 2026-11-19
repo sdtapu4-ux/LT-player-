@@ -42,6 +42,34 @@ enum class DownloadStatus(val label: String) {
     FAILED("Failed")
 }
 
+enum class DownloadMediaCategory(val label: String) {
+    VIDEO("Videos"),
+    MUSIC("Music"),
+    FILE("Files");
+
+    companion object {
+        private val videoExts = setOf("mp4", "mkv", "avi", "mov", "webm", "3gp", "m4v", "ts", "mts", "m2ts", "flv", "wmv", "ogv", "mpg", "mpeg")
+        private val audioExts = setOf("mp3", "aac", "flac", "wav", "ogg", "opus", "m4a", "wma", "alac", "amr")
+
+        fun classify(fileName: String, mimeType: String?): DownloadMediaCategory {
+            val mime = mimeType?.lowercase().orEmpty()
+            if (mime.startsWith("video/")) return VIDEO
+            if (mime.startsWith("audio/")) return MUSIC
+            val ext = fileName.substringAfterLast('.', "").lowercase()
+            return when {
+                ext in videoExts -> VIDEO
+                ext in audioExts -> MUSIC
+                else -> FILE
+            }
+        }
+    }
+}
+
+enum class SleepTimerEndAction(val label: String, val description: String) {
+    AUTO_PAUSE("Auto Pause", "Pause playback when timer ends"),
+    STOP_PLAYBACK("Stop Playback", "Stop media session when timer ends")
+}
+
 data class VideoItem(
     val id: Long,
     val uriString: String,
@@ -109,6 +137,7 @@ data class MediaFolder(
     val isSafTree: Boolean = false
 )
 
+@Serializable
 data class SubtitleCue(
     val startMs: Long,
     val endMs: Long,
@@ -247,10 +276,18 @@ data class DownloadRecord(
     val etaSeconds: Long,
     val status: DownloadStatus,
     val errorReason: String?,
-    val createdAt: Long
+    val createdAt: Long,
+    val mimeType: String = "application/octet-stream",
+    val mediaCategory: DownloadMediaCategory = DownloadMediaCategory.classify(title, mimeType),
+    val qualityLabel: String? = null,
+    val supportsRange: Boolean = true,
+    val safTreeUri: String? = null
 ) {
     val progress: Float
         get() = if (totalBytes > 0L) (bytesDownloaded.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f) else 0f
+
+    val remainingBytes: Long
+        get() = (totalBytes - bytesDownloaded).coerceAtLeast(0L)
 }
 
 data class InstalledGameInfo(

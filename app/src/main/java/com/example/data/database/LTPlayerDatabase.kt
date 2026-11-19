@@ -18,9 +18,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DownloadEntity::class,
         RecentGameEntity::class,
         SafFolderEntity::class,
-        ShareTransferHistoryEntity::class
+        ShareTransferHistoryEntity::class,
+        BrowserBookmarkEntity::class,
+        BrowserHistoryEntity::class,
+        EditorProjectEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class LTPlayerDatabase : RoomDatabase() {
@@ -33,6 +36,9 @@ abstract class LTPlayerDatabase : RoomDatabase() {
     abstract fun recentGameDao(): RecentGameDao
     abstract fun safFolderDao(): SafFolderDao
     abstract fun shareHistoryDao(): ShareHistoryDao
+    abstract fun browserBookmarkDao(): BrowserBookmarkDao
+    abstract fun browserHistoryDao(): BrowserHistoryDao
+    abstract fun editorProjectDao(): EditorProjectDao
 
     companion object {
         @Volatile
@@ -61,6 +67,48 @@ abstract class LTPlayerDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `mimeType` TEXT NOT NULL DEFAULT 'application/octet-stream'")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `mediaCategory` TEXT NOT NULL DEFAULT 'FILE'")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `qualityLabel` TEXT")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `supportsRange` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `etag` TEXT")
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `safTreeUri` TEXT")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `browser_bookmarks` (
+                        `url` TEXT NOT NULL PRIMARY KEY,
+                        `title` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `browser_history` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `url` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `visitedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `editor_projects` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `sourceUriString` TEXT NOT NULL,
+                        `configJson` TEXT NOT NULL,
+                        `updatedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun getInstance(context: Context): LTPlayerDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -68,7 +116,7 @@ abstract class LTPlayerDatabase : RoomDatabase() {
                     LTPlayerDatabase::class.java,
                     "lt_player.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                     .also { INSTANCE = it }

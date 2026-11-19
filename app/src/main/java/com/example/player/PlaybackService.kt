@@ -1,10 +1,16 @@
 package com.example.player
 
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import androidx.annotation.OptIn
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Player
@@ -17,7 +23,9 @@ import androidx.media3.exoplayer.mediacodec.MediaCodecUtil
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.example.MainActivity
+import com.example.R
 import com.example.data.model.DecoderPreference
+import com.example.utils.FormatUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -35,6 +43,13 @@ class PlaybackService : MediaSessionService() {
     private var currentDecoderPref: DecoderPreference = DecoderPreference.AUTO
 
     companion object {
+        const val CHANNEL_SLEEP_TIMER = "lt_sleep_timer"
+        const val NOTIF_ID_SLEEP_TIMER = 4401
+        const val ACTION_CANCEL_SLEEP_TIMER = "com.example.action.CANCEL_SLEEP_TIMER"
+
+        @Volatile
+        var onCancelSleepTimerFromNotification: (() -> Unit)? = null
+
         private val _audioSessionId = MutableStateFlow(0)
         val audioSessionId: StateFlow<Int> = _audioSessionId.asStateFlow()
 
@@ -44,6 +59,110 @@ class PlaybackService : MediaSessionService() {
         fun setDesiredDecoderPreference(pref: DecoderPreference) {
             _requestedDecoderPref.value = pref
         }
+
+        private fun canPostNotifications(context: Context): Boolean {
+            return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
+        }
+
+        private fun ensureSleepTimerChannel(context: Context): NotificationManager {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (nm.getNotificationChannel(CHANNEL_SLEEP_TIMER) == null) {
+                    val channel = NotificationChannel(
+                        CHANNEL_SLEEP_TIMER,
+                        "Sleep Timer",
+                        NotificationManager.IMPORTANCE_LOW
+                    ).apply {
+                        description = "Live countdown notification for LT PLAYER video and music sleep timer"
+                        setShowBadge(false)
+                    }
+                    nm.createNotificationChannel(channel)
+                }
+            }
+            return nm
+        }
+
+        fun postSleepTimerNotification(
+            context: Context,
+            remainingSec: Int,
+            actionLabel: String
+        ) {
+            if (!canPostNotifications(context)) return
+            val nm = ensureSleepTimerChannel(context)
+            val openAppIntent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val openPending = PendingIntent.getActivity(
+                context,
+                4402,
+                openAppIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val cancelIntent = Intent(context, PlaybackService::class.java).apply {
+                action = ACTION_CANCEL_SLEEP_TIMER
+            }
+            val cancelPending = PendingIntent.getService(
+                context,
+                4403,
+                cancelIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val formatted = FormatUtils.formatTimerSeconds(remainingSec)
+            val notif = NotificationCompat.Builder(context, CHANNEL_SLEEP_TIMER)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("Sleep Timer • $formatted remaining")
+                .setContentText("On timer end: $actionLabel")
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setSilent(true)
+                .setContentIntent(openPending)
+                .addAction(0, "Cancel Timer", cancelPending)
+                .build()
+            runCatching { nm.notify(NOTIF_ID_SLEEP_TIMER, notif) }
+        }
+
+        fun postSleepTimerFinishedNotification(
+            context: Context,
+            actionLabel: String
+        ) {
+            if (!canPostNotifications(context)) return
+            val nm = ensureSleepTimerChannel(context)
+            val openAppIntent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val openPending = PendingIntent.getActivity(
+                context,
+                4402,
+                openAppIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val notif = NotificationCompat.Builder(context, CHANNEL_SLEEP_TIMER)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("Sleep Timer Ended")
+                .setContentText("$actionLabel executed automatically.")
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .setContentIntent(openPending)
+                .build()
+            runCatching { nm.notify(NOTIF_ID_SLEEP_TIMER, notif) }
+        }
+
+        fun cancelSleepTimerNotification(context: Context) {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            runCatching { nm.cancel(NOTIF_ID_SLEEP_TIMER) }
+        }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_CANCEL_SLEEP_TIMER) {
+            onCancelSleepTimerFromNotification?.invoke()
+            cancelSleepTimerNotification(this)
+        }
+        return super.onStartCommand(intent, flags, startId)
     }
 
     @OptIn(UnstableApi::class)

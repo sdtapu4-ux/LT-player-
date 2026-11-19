@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.Delete
@@ -31,7 +32,6 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.ViewCompact
-import androidx.compose.material.icons.rounded.ViewList
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -151,7 +151,7 @@ fun FoldersScreen(
                         ) {
                             Icon(
                                 when (viewMode) {
-                                    FolderViewMode.LIST -> Icons.Rounded.ViewList
+                                    FolderViewMode.LIST -> Icons.AutoMirrored.Rounded.ViewList
                                     FolderViewMode.GRID -> Icons.Rounded.GridView
                                     FolderViewMode.COMPACT -> Icons.Rounded.ViewCompact
                                 },

@@ -85,7 +85,13 @@ data class DownloadEntity(
     val totalBytes: Long,
     val status: String,
     val errorReason: String?,
-    val createdAt: Long
+    val createdAt: Long,
+    val mimeType: String = "application/octet-stream",
+    val mediaCategory: String = "FILE",
+    val qualityLabel: String? = null,
+    val supportsRange: Boolean = true,
+    val etag: String? = null,
+    val safTreeUri: String? = null
 )
 
 @Entity(tableName = "recent_games")
@@ -117,4 +123,28 @@ data class ShareTransferHistoryEntity(
     val localUriString: String?,
     val transportMode: String,
     val completedAt: Long
+)
+
+@Entity(tableName = "browser_bookmarks")
+data class BrowserBookmarkEntity(
+    @PrimaryKey val url: String,
+    val title: String,
+    val createdAt: Long
+)
+
+@Entity(tableName = "browser_history")
+data class BrowserHistoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val url: String,
+    val title: String,
+    val visitedAt: Long
+)
+
+@Entity(tableName = "editor_projects")
+data class EditorProjectEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val sourceUriString: String,
+    val configJson: String,
+    val updatedAt: Long
 )

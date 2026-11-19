@@ -11,12 +11,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.PauseCircle
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.StopCircle
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -44,6 +49,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.example.data.model.SleepTimerEndAction
 import com.example.ui.theme.CoralError
 import com.example.ui.theme.ElectricGreen
 import com.example.ui.theme.PremiumBlue
@@ -56,19 +62,28 @@ private val SLEEP_TIMER_PRESETS_MIN = listOf(5, 10, 15, 30, 45, 60)
 fun VideoTimerBottomSheet(
     remainingSec: Int?,
     totalSec: Int?,
+    endAction: SleepTimerEndAction = SleepTimerEndAction.AUTO_PAUSE,
+    onSelectEndAction: (SleepTimerEndAction) -> Unit = {},
     onStartMinutes: (Int) -> Unit,
+    onStartHoursMinutes: (Int, Int) -> Unit = { h, m -> onStartMinutes(h * 60 + m) },
     onResetTimer: () -> Unit,
     onCancelTimer: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    var customHoursInput by remember { mutableStateOf("0") }
     var customMinutesInput by remember { mutableStateOf("") }
-    val customMinutesParsed = customMinutesInput.trim().toIntOrNull()
-    val isCustomValid = customMinutesParsed != null && customMinutesParsed in 1..480
+    val parsedHours = (customHoursInput.trim().toIntOrNull() ?: 0).coerceIn(0, 12)
+    val parsedMinutes = customMinutesInput.trim().toIntOrNull() ?: 0
+    val customTotalMinutes = (parsedHours * 60) + parsedMinutes
+    val isCustomValid = (customHoursInput.isNotBlank() || customMinutesInput.isNotBlank()) &&
+        parsedMinutes in 0..59 &&
+        customTotalMinutes in 1..720
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 8.dp)
         ) {
             Row(
@@ -87,11 +102,22 @@ fun VideoTimerBottomSheet(
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold
                     )
-                    Text(
-                        text = "Automatically pauses playback when countdown ends",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.NotificationsActive,
+                            contentDescription = null,
+                            tint = PremiumBlue,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(
+                            text = "Runs in background with live notification • ${endAction.label}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 
@@ -125,7 +151,7 @@ fun VideoTimerBottomSheet(
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Text(
-                                    text = "Remaining Time",
+                                    text = "Remaining (${endAction.label})",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -183,6 +209,48 @@ fun VideoTimerBottomSheet(
                 Spacer(Modifier.height(14.dp))
             }
 
+            // When Timer Ends Action Selector
+            Text(
+                text = "When Timer Ends",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SleepTimerEndAction.entries.forEach { action ->
+                    val selected = endAction == action
+                    FilterChip(
+                        selected = selected,
+                        onClick = { onSelectEndAction(action) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = if (action == SleepTimerEndAction.AUTO_PAUSE) {
+                                    Icons.Rounded.PauseCircle
+                                } else {
+                                    Icons.Rounded.StopCircle
+                                },
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        label = { Text(action.label) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = ElectricGreen,
+                            selectedLabelColor = Color(0xFF00210E),
+                            selectedLeadingIconColor = Color(0xFF00210E)
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("timer_action_${action.name.lowercase()}")
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+
             // Preset Sleep Timer Chips: 5, 10, 15, 30, 45, 60 min
             Text(
                 text = "Preset Durations",
@@ -217,9 +285,9 @@ fun VideoTimerBottomSheet(
 
             Spacer(Modifier.height(14.dp))
 
-            // Custom Timer Input
+            // Custom Timer (Hours + Minutes)
             Text(
-                text = "Custom Timer (1 – 480 min)",
+                text = "Custom Timer (Hours & Minutes • up to 12h)",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -227,15 +295,28 @@ fun VideoTimerBottomSheet(
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                OutlinedTextField(
+                    value = customHoursInput,
+                    onValueChange = { raw ->
+                        customHoursInput = raw.filter { it.isDigit() }.take(2)
+                    },
+                    label = { Text("Hours") },
+                    placeholder = { Text("0") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier
+                        .weight(0.8f)
+                        .testTag("timer_custom_hours_input")
+                )
                 OutlinedTextField(
                     value = customMinutesInput,
                     onValueChange = { raw ->
-                        customMinutesInput = raw.filter { it.isDigit() }.take(3)
+                        customMinutesInput = raw.filter { it.isDigit() }.take(2)
                     },
                     label = { Text("Minutes") },
-                    placeholder = { Text("e.g. 25") },
+                    placeholder = { Text("25") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier
@@ -244,8 +325,9 @@ fun VideoTimerBottomSheet(
                 )
                 Button(
                     onClick = {
-                        if (customMinutesParsed != null && customMinutesParsed in 1..480) {
-                            onStartMinutes(customMinutesParsed)
+                        if (isCustomValid) {
+                            onStartHoursMinutes(parsedHours, parsedMinutes)
+                            customHoursInput = "0"
                             customMinutesInput = ""
                         }
                     },

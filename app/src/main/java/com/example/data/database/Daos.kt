@@ -105,6 +105,9 @@ interface DownloadDao {
     @Query("SELECT * FROM downloads ORDER BY createdAt DESC")
     fun observeAll(): Flow<List<DownloadEntity>>
 
+    @Query("SELECT * FROM downloads WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): DownloadEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entity: DownloadEntity): Long
 
@@ -113,6 +116,9 @@ interface DownloadDao {
 
     @Query("DELETE FROM downloads WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM downloads WHERE status IN ('SUCCESSFUL', 'FAILED')")
+    suspend fun clearCompletedAndFailed()
 
     @Query("SELECT * FROM downloads WHERE status IN ('PENDING', 'RUNNING', 'PAUSED')")
     suspend fun getActiveDownloads(): List<DownloadEntity>
@@ -149,4 +155,43 @@ interface ShareHistoryDao {
 
     @Query("DELETE FROM share_history")
     suspend fun clearAll()
+}
+
+@Dao
+interface BrowserBookmarkDao {
+    @Query("SELECT * FROM browser_bookmarks ORDER BY createdAt DESC")
+    fun observeAll(): Flow<List<BrowserBookmarkEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entity: BrowserBookmarkEntity)
+
+    @Query("DELETE FROM browser_bookmarks WHERE url = :url")
+    suspend fun deleteByUrl(url: String)
+}
+
+@Dao
+interface BrowserHistoryDao {
+    @Query("SELECT * FROM browser_history ORDER BY visitedAt DESC LIMIT 100")
+    fun observeRecent(): Flow<List<BrowserHistoryEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(entity: BrowserHistoryEntity): Long
+
+    @Query("DELETE FROM browser_history WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM browser_history")
+    suspend fun clearAll()
+}
+
+@Dao
+interface EditorProjectDao {
+    @Query("SELECT * FROM editor_projects ORDER BY updatedAt DESC")
+    fun observeAll(): Flow<List<EditorProjectEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(entity: EditorProjectEntity): Long
+
+    @Query("DELETE FROM editor_projects WHERE id = :id")
+    suspend fun deleteById(id: Long)
 }

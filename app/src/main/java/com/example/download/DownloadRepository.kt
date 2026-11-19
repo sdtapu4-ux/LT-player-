@@ -1,30 +1,79 @@
 package com.example.download
 
-import android.app.DownloadManager
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
-import android.os.Environment
 import android.webkit.URLUtil
+import androidx.core.content.FileProvider
 import com.example.data.database.DownloadDao
 import com.example.data.database.DownloadEntity
+import com.example.data.model.DownloadMediaCategory
 import com.example.data.model.DownloadRecord
 import com.example.data.model.DownloadStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.util.Collections
+
+object DownloadLiveRegistry {
+    private val _stats = MutableStateFlow<Map<Long, Pair<Long, Long>>>(emptyMap())
+    val stats: StateFlow<Map<Long, Pair<Long, Long>>> = _stats.asStateFlow()
+
+    private val pausedIds = Collections.synchronizedSet(mutableSetOf<Long>())
+    private val cancelledIds = Collections.synchronizedSet(mutableSetOf<Long>())
+
+    fun updateStats(id: Long, speedBytesPerSec: Long, etaSeconds: Long) {
+        val mutable = _stats.value.toMutableMap()
+        mutable[id] = speedBytesPerSec to etaSeconds
+        _stats.value = mutable
+    }
+
+    fun clearStats(id: Long) {
+        if (_stats.value.containsKey(id)) {
+            val mutable = _stats.value.toMutableMap()
+            mutable.remove(id)
+            _stats.value = mutable
+        }
+    }
+
+    fun markPaused(id: Long) {
+        pausedIds.add(id)
+    }
+
+    fun markCancelled(id: Long) {
+        cancelledIds.add(id)
+    }
+
+    fun clearFlags(id: Long) {
+        pausedIds.remove(id)
+        cancelledIds.remove(id)
+    }
+
+    fun isPaused(id: Long): Boolean = pausedIds.contains(id)
+    fun isCancelled(id: Long): Boolean = cancelledIds.contains(id)
+}
 
 class DownloadRepository(
     private val context: Context,
     private val downloadDao: DownloadDao
 ) {
-    private val downloadManager: DownloadManager =
-        context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-
     private val blockedExtensions = setOf("m3u8", "mpd", "ism", "wvm")
 
-    val downloadsFlow: Flow<List<DownloadRecord>> = downloadDao.observeAll().map { entities ->
+    val downloadsFlow: Flow<List<DownloadRecord>> = combine(
+        downloadDao.observeAll(),
+        DownloadLiveRegistry.stats
+    ) { entities, statsMap ->
         entities.map { entity ->
+            val live = statsMap[entity.id]
+            val category = runCatching { DownloadMediaCategory.valueOf(entity.mediaCategory) }
+                .getOrElse { DownloadMediaCategory.classify(entity.title, entity.mimeType) }
+            val status = runCatching { DownloadStatus.valueOf(entity.status) }
+                .getOrDefault(DownloadStatus.PENDING)
             DownloadRecord(
                 id = entity.id,
                 systemDownloadId = entity.systemDownloadId,
@@ -34,12 +83,16 @@ class DownloadRepository(
                 localPath = entity.localPath,
                 bytesDownloaded = entity.bytesDownloaded,
                 totalBytes = entity.totalBytes,
-                speedBytesPerSec = 0L,
-                etaSeconds = 0L,
-                status = runCatching { DownloadStatus.valueOf(entity.status) }
-                    .getOrDefault(DownloadStatus.PENDING),
+                speedBytesPerSec = if (status == DownloadStatus.RUNNING) (live?.first ?: 0L) else 0L,
+                etaSeconds = if (status == DownloadStatus.RUNNING) (live?.second ?: 0L) else 0L,
+                status = status,
                 errorReason = entity.errorReason,
-                createdAt = entity.createdAt
+                createdAt = entity.createdAt,
+                mimeType = entity.mimeType,
+                mediaCategory = category,
+                qualityLabel = entity.qualityLabel,
+                supportsRange = entity.supportsRange,
+                safTreeUri = entity.safTreeUri
             )
         }
     }
@@ -69,111 +122,217 @@ class DownloadRepository(
         return Result.success(uri)
     }
 
-    suspend fun startDownload(
+    suspend fun enqueueDownload(
         rawUrl: String,
         customTitle: String?,
-        usePublicDownloadsFolder: Boolean
+        mimeType: String? = null,
+        qualityLabel: String? = null,
+        knownTotalBytes: Long = 0L,
+        usePublicDownloadsFolder: Boolean = true,
+        safTreeUri: String? = null
     ): Result<Long> = withContext(Dispatchers.IO) {
         val uriResult = validateAuthorizedUrl(rawUrl)
         val uri = uriResult.getOrElse { return@withContext Result.failure(it) }
 
-        val guessedName = URLUtil.guessFileName(uri.toString(), null, null)
+        val guessedName = URLUtil.guessFileName(uri.toString(), null, mimeType)
             .ifBlank { "lt_media_${System.currentTimeMillis()}.mp4" }
         val fileName = customTitle?.takeIf { it.isNotBlank() }?.let { safe ->
-            val ext = guessedName.substringAfterLast('.', "mp4")
-            if (safe.contains('.')) safe else "$safe.$ext"
+            val ext = guessedName.substringAfterLast('.', "")
+            if (safe.contains('.') || ext.isBlank()) safe else "$safe.$ext"
         } ?: guessedName
 
+        val resolvedMime = mimeType?.takeIf { it.isNotBlank() } ?: guessMimeFromName(fileName)
+        val category = DownloadMediaCategory.classify(fileName, resolvedMime)
+        val localPathLabel = when {
+            !safTreeUri.isNullOrBlank() -> "SAF Folder/$fileName"
+            usePublicDownloadsFolder -> "Downloads/LTPlayer/$fileName"
+            else -> "App Storage/$fileName"
+        }
+
         return@withContext try {
-            val request = DownloadManager.Request(uri).apply {
-                setTitle(fileName)
-                setDescription("LT PLAYER Download Manager")
-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                setAllowedOverMetered(true)
-                setAllowedOverRoaming(true)
-                if (usePublicDownloadsFolder) {
-                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "LTPlayer/$fileName")
-                } else {
-                    setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, fileName)
-                }
-            }
-            val sysId = downloadManager.enqueue(request)
             val entityId = downloadDao.insert(
                 DownloadEntity(
-                    systemDownloadId = sysId,
+                    systemDownloadId = System.currentTimeMillis(),
                     title = fileName,
                     url = uri.toString(),
                     destinationUri = null,
-                    localPath = if (usePublicDownloadsFolder) "Downloads/LTPlayer/$fileName" else "App Downloads/$fileName",
+                    localPath = localPathLabel,
                     bytesDownloaded = 0L,
-                    totalBytes = 0L,
-                    status = DownloadStatus.RUNNING.name,
+                    totalBytes = knownTotalBytes.coerceAtLeast(0L),
+                    status = DownloadStatus.PENDING.name,
                     errorReason = null,
-                    createdAt = System.currentTimeMillis()
+                    createdAt = System.currentTimeMillis(),
+                    mimeType = resolvedMime,
+                    mediaCategory = category.name,
+                    qualityLabel = qualityLabel,
+                    supportsRange = true,
+                    safTreeUri = safTreeUri
                 )
             )
+            DownloadLiveRegistry.clearFlags(entityId)
+            MediaDownloadService.enqueue(context, entityId)
             Result.success(entityId)
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
-    suspend fun syncProgressWithSystem(): Map<Long, Pair<Long, Long>> = withContext(Dispatchers.IO) {
-        val active = downloadDao.getActiveDownloads()
-        val speedSamples = mutableMapOf<Long, Pair<Long, Long>>()
-        for (entity in active) {
-            val query = DownloadManager.Query().setFilterById(entity.systemDownloadId)
-            downloadManager.query(query)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
-                    val dlIdx = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
-                    val totalIdx = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
-                    val uriIdx = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
-                    val reasonIdx = cursor.getColumnIndex(DownloadManager.COLUMN_REASON)
+    suspend fun startDownload(
+        rawUrl: String,
+        customTitle: String?,
+        usePublicDownloadsFolder: Boolean
+    ): Result<Long> = enqueueDownload(
+        rawUrl = rawUrl,
+        customTitle = customTitle,
+        usePublicDownloadsFolder = usePublicDownloadsFolder
+    )
 
-                    val sysStatus = if (statusIdx >= 0) cursor.getInt(statusIdx) else DownloadManager.STATUS_PENDING
-                    val downloaded = if (dlIdx >= 0) cursor.getLong(dlIdx).coerceAtLeast(0L) else entity.bytesDownloaded
-                    val total = if (totalIdx >= 0) cursor.getLong(totalIdx).coerceAtLeast(0L) else entity.totalBytes
-                    val localUri = if (uriIdx >= 0) cursor.getString(uriIdx) else entity.destinationUri
-                    val reason = if (reasonIdx >= 0) cursor.getInt(reasonIdx) else 0
-
-                    val mappedStatus = when (sysStatus) {
-                        DownloadManager.STATUS_PENDING -> DownloadStatus.PENDING
-                        DownloadManager.STATUS_RUNNING -> DownloadStatus.RUNNING
-                        DownloadManager.STATUS_PAUSED -> DownloadStatus.PAUSED
-                        DownloadManager.STATUS_SUCCESSFUL -> DownloadStatus.SUCCESSFUL
-                        DownloadManager.STATUS_FAILED -> DownloadStatus.FAILED
-                        else -> DownloadStatus.PENDING
-                    }
-                    val delta = (downloaded - entity.bytesDownloaded).coerceAtLeast(0L)
-                    speedSamples[entity.id] = delta to total
-
-                    downloadDao.update(
-                        entity.copy(
-                            bytesDownloaded = downloaded,
-                            totalBytes = total,
-                            destinationUri = localUri,
-                            status = mappedStatus.name,
-                            errorReason = if (mappedStatus == DownloadStatus.FAILED) "Download error code $reason" else null
-                        )
-                    )
-                }
-            }
+    suspend fun pauseDownload(id: Long) = withContext(Dispatchers.IO) {
+        DownloadLiveRegistry.markPaused(id)
+        MediaDownloadService.pause(context, id)
+        downloadDao.getById(id)?.let { entity ->
+            downloadDao.update(entity.copy(status = DownloadStatus.PAUSED.name))
         }
-        speedSamples
+        DownloadLiveRegistry.clearStats(id)
+    }
+
+    suspend fun resumeDownload(id: Long): Result<Long> = withContext(Dispatchers.IO) {
+        val entity = downloadDao.getById(id)
+            ?: return@withContext Result.failure(IllegalArgumentException("Download entry not found."))
+        DownloadLiveRegistry.clearFlags(id)
+        downloadDao.update(
+            entity.copy(
+                status = DownloadStatus.PENDING.name,
+                errorReason = null
+            )
+        )
+        MediaDownloadService.resume(context, id)
+        Result.success(id)
     }
 
     suspend fun cancelDownload(record: DownloadRecord) = withContext(Dispatchers.IO) {
-        runCatching { downloadManager.remove(record.systemDownloadId) }
+        DownloadLiveRegistry.markCancelled(record.id)
+        MediaDownloadService.cancel(context, record.id)
+        MediaDownloadService.partFileFor(context, record.id).delete()
+        DownloadLiveRegistry.clearStats(record.id)
         downloadDao.deleteById(record.id)
     }
 
-    suspend fun retryDownload(record: DownloadRecord): Result<Long> {
-        cancelDownload(record)
-        return startDownload(
-            rawUrl = record.url,
-            customTitle = record.title,
-            usePublicDownloadsFolder = record.localPath?.startsWith("Downloads/") == true
-        )
+    suspend fun retryDownload(record: DownloadRecord): Result<Long> = withContext(Dispatchers.IO) {
+        MediaDownloadService.partFileFor(context, record.id).delete()
+        DownloadLiveRegistry.clearFlags(record.id)
+        DownloadLiveRegistry.clearStats(record.id)
+        val entity = downloadDao.getById(record.id)
+        if (entity != null) {
+            downloadDao.update(
+                entity.copy(
+                    bytesDownloaded = 0L,
+                    status = DownloadStatus.PENDING.name,
+                    errorReason = null
+                )
+            )
+            MediaDownloadService.enqueue(context, entity.id)
+            Result.success(entity.id)
+        } else {
+            enqueueDownload(
+                rawUrl = record.url,
+                customTitle = record.title,
+                mimeType = record.mimeType,
+                qualityLabel = record.qualityLabel,
+                knownTotalBytes = record.totalBytes,
+                usePublicDownloadsFolder = record.localPath?.startsWith("Downloads/") == true,
+                safTreeUri = record.safTreeUri
+            )
+        }
+    }
+
+    suspend fun deleteDownloadedFile(record: DownloadRecord): Boolean = withContext(Dispatchers.IO) {
+        MediaDownloadService.partFileFor(context, record.id).delete()
+        val deletedUri = record.destinationUri?.let { dest ->
+            runCatching {
+                val uri = Uri.parse(dest)
+                if (uri.scheme == "file") {
+                    File(uri.path.orEmpty()).delete()
+                } else {
+                    context.contentResolver.delete(uri, null, null) > 0
+                }
+            }.getOrDefault(false)
+        } ?: true
+        DownloadLiveRegistry.clearStats(record.id)
+        downloadDao.deleteById(record.id)
+        deletedUri
+    }
+
+    suspend fun clearDownloadHistory() = withContext(Dispatchers.IO) {
+        downloadDao.clearCompletedAndFailed()
+    }
+
+    suspend fun recoverInterruptedDownloads() = withContext(Dispatchers.IO) {
+        val active = downloadDao.getActiveDownloads()
+        for (entity in active) {
+            if (entity.status == DownloadStatus.RUNNING.name) {
+                val partialLen = MediaDownloadService.partFileFor(context, entity.id).length()
+                downloadDao.update(
+                    entity.copy(
+                        bytesDownloaded = partialLen.coerceAtLeast(entity.bytesDownloaded),
+                        status = DownloadStatus.PAUSED.name
+                    )
+                )
+            }
+        }
+    }
+
+    fun buildOpenIntent(record: DownloadRecord): Intent? {
+        val uri = resolveShareableUri(record) ?: return null
+        return Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, record.mimeType.ifBlank { "*/*" })
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+    }
+
+    fun buildShareIntent(record: DownloadRecord): Intent? {
+        val uri = resolveShareableUri(record) ?: return null
+        return Intent(Intent.ACTION_SEND).apply {
+            type = record.mimeType.ifBlank { "*/*" }
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_TITLE, record.title)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }.let { Intent.createChooser(it, "Share ${record.title}") }.apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+    }
+
+    private fun resolveShareableUri(record: DownloadRecord): Uri? {
+        val raw = record.destinationUri ?: return null
+        val parsed = Uri.parse(raw)
+        if (parsed.scheme == "file") {
+            val file = File(parsed.path.orEmpty())
+            if (file.exists()) {
+                return runCatching {
+                    FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                }.getOrDefault(parsed)
+            }
+        }
+        return parsed
+    }
+
+    private fun guessMimeFromName(fileName: String): String {
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        return when (ext) {
+            "mp4", "m4v" -> "video/mp4"
+            "mkv" -> "video/x-matroska"
+            "webm" -> "video/webm"
+            "mov" -> "video/quicktime"
+            "avi" -> "video/x-msvideo"
+            "3gp" -> "video/3gpp"
+            "mp3" -> "audio/mpeg"
+            "aac" -> "audio/aac"
+            "flac" -> "audio/flac"
+            "wav" -> "audio/wav"
+            "ogg", "opus" -> "audio/ogg"
+            "m4a" -> "audio/mp4"
+            "pdf" -> "application/pdf"
+            else -> "application/octet-stream"
+        }
     }
 }

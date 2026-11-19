@@ -12,10 +12,13 @@ import java.io.File
 data class SavedGalleryVideo(
     val contentUri: Uri,
     val displayName: String,
-    val sizeBytes: Long
+    val sizeBytes: Long,
+    val relativeFolder: String = GalleryMediaSaver.EDITED_RELATIVE_PATH
 )
 
 object GalleryMediaSaver {
+
+    const val EDITED_RELATIVE_PATH = "Movies/LT PLAYER/Edited Videos"
 
     fun sanitizeOutputFileName(baseTitle: String, suffix: String = ""): String {
         val cleaned = baseTitle
@@ -40,10 +43,11 @@ object GalleryMediaSaver {
 
         val resolver = context.contentResolver
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val relativePath = "${Environment.DIRECTORY_MOVIES}/LT PLAYER/Edited Videos"
             val values = ContentValues().apply {
                 put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
                 put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-                put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/LT PLAYER")
+                put(MediaStore.Video.Media.RELATIVE_PATH, relativePath)
                 put(MediaStore.Video.Media.IS_PENDING, 1)
             }
             val collection = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
@@ -64,7 +68,8 @@ object GalleryMediaSaver {
                 SavedGalleryVideo(
                     contentUri = itemUri,
                     displayName = displayName,
-                    sizeBytes = sourceTempFile.length()
+                    sizeBytes = sourceTempFile.length(),
+                    relativeFolder = relativePath
                 )
             } catch (t: Throwable) {
                 runCatching { resolver.delete(itemUri, null, null) }
@@ -73,11 +78,11 @@ object GalleryMediaSaver {
         } else {
             @Suppress("DEPRECATION")
             val publicMovies = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
-            val targetDir = File(publicMovies, "LT PLAYER").apply { mkdirs() }
+            val targetDir = File(publicMovies, "LT PLAYER/Edited Videos").apply { mkdirs() }
             val destFile = if (targetDir.canWrite()) {
                 File(targetDir, displayName)
             } else {
-                val appDir = File(context.getExternalFilesDir(Environment.DIRECTORY_MOVIES), "LT PLAYER").apply { mkdirs() }
+                val appDir = File(context.getExternalFilesDir(Environment.DIRECTORY_MOVIES), "LT PLAYER/Edited Videos").apply { mkdirs() }
                 File(appDir, displayName)
             }
             sourceTempFile.copyTo(destFile, overwrite = true)
@@ -104,7 +109,8 @@ object GalleryMediaSaver {
             return SavedGalleryVideo(
                 contentUri = insertedUri,
                 displayName = displayName,
-                sizeBytes = destFile.length()
+                sizeBytes = destFile.length(),
+                relativeFolder = "Movies/LT PLAYER/Edited Videos"
             )
         }
     }

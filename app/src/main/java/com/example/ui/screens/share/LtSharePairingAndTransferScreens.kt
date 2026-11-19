@@ -26,13 +26,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.CompareArrows
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.Cancel
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.CompareArrows
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.LibraryMusic
@@ -148,7 +148,7 @@ fun LtSharePairingConfirmScreen(
                     ) {
                         DevicePillCard(label = "This Device", deviceName = shareState.localDeviceName, modifier = Modifier.weight(1f))
                         Icon(
-                            Icons.Rounded.CompareArrows,
+                            Icons.AutoMirrored.Rounded.CompareArrows,
                             contentDescription = null,
                             tint = ElectricGreen,
                             modifier = Modifier.padding(horizontal = 8.dp)
