@@ -15,7 +15,16 @@ import com.example.data.model.MediaFailureCause
 import com.example.data.model.PlaybackEnginePreference
 import com.example.data.preferences.SettingsDataStore
 import com.example.data.scanner.CodecInspector
+import com.example.data.scanner.SubtitleParser
 import com.example.download.DownloadRepository
+import com.example.editor.GalleryMediaSaver
+import com.example.editor.VideoEditorConfig
+import com.example.editor.VideoEditorSpecBuilder
+import com.example.editor.VideoExportResolution
+import com.example.editor.VideoFilterPreset
+import com.example.player.PlayerController
+import com.example.data.repository.MediaRepository
+import com.example.data.scanner.MediaScanner
 import com.example.share.LtShareQrCodec
 import com.example.share.LtShareReplayGuard
 import com.example.share.LtShareSecurity
@@ -227,5 +236,66 @@ class ExampleRobolectricTest {
             decoderPreference = DecoderPreference.AUTO
         )
         assertEquals(MediaFailureCause.UNREADABLE_SOURCE, missingDiag.cause)
+    }
+
+    @Test
+    fun videoEditor_buildsMedia3EffectsAndSavesNonDestructiveCopyToGallery() {
+        val cfg = VideoEditorConfig(
+            sourceUriString = "content://media/external/video/media/10",
+            title = "Holiday Movie.mp4",
+            durationMs = 30_000L,
+            rotationDegrees = 90,
+            flipHorizontal = true,
+            brightness = 0.15f,
+            contrast = 0.2f,
+            saturation = 25f,
+            filterPreset = VideoFilterPreset.SEPIA,
+            overlayText = "LT PLAYER",
+            subtitleCues = SubtitleParser.parseSrt("1\n00:00:00,000 --> 00:00:05,000\nSub Cue"),
+            subtitleEnabled = true,
+            exportResolution = VideoExportResolution.P480
+        )
+        val effects = VideoEditorSpecBuilder.buildVideoEffects(
+            config = cfg,
+            includeOverlays = true,
+            targetShortSidePx = cfg.exportResolution.shortSidePx
+        )
+        // ScaleAndRotate + Brightness + Contrast + HslAdjustment + Sepia + OverlayEffect + Presentation = 7
+        assertEquals(7, effects.size)
+
+        val tempOut = File(context.cacheDir, "lt_test_export.mp4").apply {
+            writeBytes("fake-mp4-output-bytes-123456".toByteArray())
+        }
+        val outName = GalleryMediaSaver.sanitizeOutputFileName("Holiday Movie.mp4", "trim")
+        assertTrue(outName.endsWith(".mp4"))
+        assertTrue(outName.contains("Holiday_Movie") || outName.contains("Holiday Movie"))
+        val saved = GalleryMediaSaver.saveVideoToGallery(context, tempOut, outName)
+        assertEquals(tempOut.length(), saved.sizeBytes)
+        assertTrue(saved.contentUri.toString().isNotBlank())
+        tempOut.delete()
+    }
+
+    @Test
+    fun playerController_sleepTimerSupportsPresetsCustomResetAndCancel() {
+        val repo = MediaRepository(
+            context = context,
+            database = db,
+            scanner = MediaScanner(context)
+        )
+        val pc = PlayerController(context, repo)
+        pc.startSleepTimer(15)
+        assertEquals(900, pc.state.value.sleepTimerTotalSec)
+        assertTrue((pc.state.value.sleepTimerRemainingSec ?: 0) in 898..900)
+
+        pc.startSleepTimer(25)
+        assertEquals(1500, pc.state.value.sleepTimerTotalSec)
+
+        pc.resetSleepTimer()
+        assertEquals(1500, pc.state.value.sleepTimerRemainingSec)
+
+        pc.cancelSleepTimer()
+        assertEquals(null, pc.state.value.sleepTimerRemainingSec)
+        assertEquals(null, pc.state.value.sleepTimerTotalSec)
+        pc.release()
     }
 }

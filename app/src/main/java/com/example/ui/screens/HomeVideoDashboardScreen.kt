@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Folder
@@ -106,6 +107,7 @@ fun HomeVideoDashboardScreen(
     onOpenPlaylists: () -> Unit,
     onOpenLtShare: () -> Unit,
     onInspectCodec: (VideoItem) -> Unit,
+    onEditVideo: (VideoItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var isGridLayout by remember { mutableStateOf(false) }
@@ -531,6 +533,7 @@ fun HomeVideoDashboardScreen(
                                 onToggleFavorite = { onToggleFavorite(video) },
                                 onAddToPlaylist = { onAddToPlaylist(video) },
                                 onInspectCodec = { onInspectCodec(video) },
+                                onEditVideo = { onEditVideo(video) },
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -547,7 +550,8 @@ fun HomeVideoDashboardScreen(
                         onClick = { onPlayVideo(video, videos) },
                         onToggleFavorite = { onToggleFavorite(video) },
                         onAddToPlaylist = { onAddToPlaylist(video) },
-                        onInspectCodec = { onInspectCodec(video) }
+                        onInspectCodec = { onInspectCodec(video) },
+                        onEditVideo = { onEditVideo(video) }
                     )
                 }
             }
@@ -805,6 +809,7 @@ private fun VideoGridCard(
     onToggleFavorite: () -> Unit,
     onAddToPlaylist: () -> Unit,
     onInspectCodec: () -> Unit,
+    onEditVideo: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -858,7 +863,8 @@ private fun VideoGridCard(
                         onDismiss = { menuOpen = false },
                         onToggleFavorite = onToggleFavorite,
                         onAddToPlaylist = onAddToPlaylist,
-                        onInspectCodec = onInspectCodec
+                        onInspectCodec = onInspectCodec,
+                        onEditVideo = onEditVideo
                     )
                 }
             }
@@ -873,7 +879,8 @@ private fun VideoListRowCard(
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
     onAddToPlaylist: () -> Unit,
-    onInspectCodec: () -> Unit
+    onInspectCodec: () -> Unit,
+    onEditVideo: () -> Unit
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Surface(
@@ -974,7 +981,8 @@ private fun VideoListRowCard(
                     onDismiss = { menuOpen = false },
                     onToggleFavorite = onToggleFavorite,
                     onAddToPlaylist = onAddToPlaylist,
-                    onInspectCodec = onInspectCodec
+                    onInspectCodec = onInspectCodec,
+                    onEditVideo = onEditVideo
                 )
             }
         }
@@ -988,9 +996,18 @@ private fun VideoOverflowMenu(
     onDismiss: () -> Unit,
     onToggleFavorite: () -> Unit,
     onAddToPlaylist: () -> Unit,
-    onInspectCodec: () -> Unit
+    onInspectCodec: () -> Unit,
+    onEditVideo: () -> Unit
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        DropdownMenuItem(
+            text = { Text("Edit Video") },
+            leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null, tint = ElectricGreen) },
+            onClick = {
+                onDismiss()
+                onEditVideo()
+            }
+        )
         DropdownMenuItem(
             text = { Text(if (isFavorite) "Remove from Favorites" else "Add to Favorites") },
             leadingIcon = {

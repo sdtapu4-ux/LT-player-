@@ -5,6 +5,12 @@ import com.example.data.model.DecoderPreference
 import com.example.data.model.PlaybackEnginePreference
 import com.example.data.scanner.CodecInspector
 import com.example.data.scanner.SubtitleParser
+import com.example.editor.VideoCropPreset
+import com.example.editor.VideoEditorConfig
+import com.example.editor.VideoEditorSpecBuilder
+import com.example.editor.VideoExportResolution
+import com.example.editor.VideoSplitExportChoice
+import com.example.editor.VideoTimelineMode
 import com.example.player.EngineFallbackDecision
 import com.example.player.PlaybackEnginePolicy
 import com.example.utils.FormatUtils
@@ -25,6 +31,9 @@ class ExampleUnitTest {
         assertEquals("1:01:05", FormatUtils.formatDuration(3_665_000L))
         assertEquals("0 B", FormatUtils.formatFileSize(0L))
         assertEquals("1.0 MB", FormatUtils.formatFileSize(1024L * 1024L))
+        assertEquals("00:00", FormatUtils.formatTimerSeconds(0))
+        assertEquals("05:00", FormatUtils.formatTimerSeconds(300))
+        assertEquals("1:00:00", FormatUtils.formatTimerSeconds(3600))
     }
 
     @Test
@@ -215,5 +224,56 @@ class ExampleUnitTest {
             isDecoderInitFailure = true
         )
         assertTrue(media3Terminal is EngineFallbackDecision.TerminalFailure)
+    }
+
+    @Test
+    fun videoEditorSpecBuilder_handlesTrimCutSplitCropResolutionAndSpeed() {
+        val trimCfg = VideoEditorConfig(
+            sourceUriString = "content://video/1",
+            title = "Clip",
+            durationMs = 20_000L,
+            timelineMode = VideoTimelineMode.TRIM,
+            trimStartMs = 3_000L,
+            trimEndMs = 15_000L
+        )
+        assertEquals(listOf(3_000L to 15_000L), VideoEditorSpecBuilder.buildSingleVideoSegmentsMs(trimCfg))
+
+        val cutCfg = trimCfg.copy(
+            timelineMode = VideoTimelineMode.CUT,
+            cutStartMs = 6_000L,
+            cutEndMs = 12_000L
+        )
+        assertEquals(
+            listOf(0L to 6_000L, 12_000L to 20_000L),
+            VideoEditorSpecBuilder.buildSingleVideoSegmentsMs(cutCfg)
+        )
+
+        val splitCfg = trimCfg.copy(
+            timelineMode = VideoTimelineMode.SPLIT,
+            splitPositionMs = 9_000L,
+            splitExportChoice = VideoSplitExportChoice.BOTH
+        )
+        assertEquals(
+            listOf(0L to 9_000L, 9_000L to 20_000L),
+            VideoEditorSpecBuilder.buildSingleVideoSegmentsMs(splitCfg)
+        )
+
+        val cropSquare = VideoEditorSpecBuilder.computeCropBounds(
+            trimCfg.copy(sourceWidth = 1920, sourceHeight = 1080, cropPreset = VideoCropPreset.RATIO_1_1)
+        )
+        assertFalse(cropSquare.isFullFrame)
+        assertTrue(cropSquare.left > -1f && cropSquare.right < 1f)
+
+        val clampedCrop = VideoEditorSpecBuilder.computeCropBounds(
+            trimCfg.copy(cropPreset = VideoCropPreset.ORIGINAL, cropInsetLeft = 0.8f, cropInsetRight = 0.8f)
+        )
+        assertTrue(clampedCrop.right - clampedCrop.left >= 0.15f)
+
+        assertEquals(720, VideoEditorSpecBuilder.resolveTargetShortSidePx(trimCfg.copy(exportResolution = VideoExportResolution.P720), false))
+        assertEquals(null, VideoEditorSpecBuilder.resolveTargetShortSidePx(trimCfg.copy(exportResolution = VideoExportResolution.ORIGINAL), false))
+        assertEquals(720, VideoEditorSpecBuilder.resolveTargetShortSidePx(trimCfg.copy(exportResolution = VideoExportResolution.ORIGINAL), true))
+
+        val speedProvider = VideoEditorSpecBuilder.ConstantSpeedProvider(2.0f)
+        assertEquals(2.0f, speedProvider.getSpeed(1_000_000L), 0.001f)
     }
 }

@@ -89,6 +89,8 @@ data class PlayerUiState(
     val externalSubtitleCues: List<SubtitleCue> = emptyList(),
     val playbackError: String? = null,
     val sleepTimerRemainingSec: Int? = null,
+    val sleepTimerTotalSec: Int? = null,
+    val sleepTimerAutoPausedNotice: Boolean = false,
     val equalizerSupported: Boolean = false,
     val equalizerEnabled: Boolean = false,
     val equalizerPresets: List<String> = emptyList(),
@@ -1083,13 +1085,29 @@ class PlayerController(
     }
 
     fun startSleepTimer(minutes: Int) {
-        sleepTimerJob?.cancel()
         if (minutes <= 0) {
-            _state.update { it.copy(sleepTimerRemainingSec = null) }
+            cancelSleepTimer()
             return
         }
+        startSleepTimerSeconds(minutes.coerceIn(1, 480) * 60)
+    }
+
+    fun startSleepTimerSeconds(totalSeconds: Int) {
+        sleepTimerJob?.cancel()
+        if (totalSeconds <= 0) {
+            cancelSleepTimer()
+            return
+        }
+        val clampedSec = totalSeconds.coerceIn(1, 480 * 60)
+        _state.update {
+            it.copy(
+                sleepTimerTotalSec = clampedSec,
+                sleepTimerRemainingSec = clampedSec,
+                sleepTimerAutoPausedNotice = false
+            )
+        }
         sleepTimerJob = scope.launch {
-            var remaining = minutes * 60
+            var remaining = clampedSec
             while (remaining > 0 && isActive) {
                 _state.update { it.copy(sleepTimerRemainingSec = remaining) }
                 delay(1000L)
@@ -1097,9 +1115,38 @@ class PlayerController(
             }
             if (isActive) {
                 pause()
-                _state.update { it.copy(sleepTimerRemainingSec = null) }
+                _state.update {
+                    it.copy(
+                        sleepTimerRemainingSec = null,
+                        sleepTimerTotalSec = null,
+                        sleepTimerAutoPausedNotice = true
+                    )
+                }
             }
         }
+    }
+
+    fun resetSleepTimer() {
+        val total = _state.value.sleepTimerTotalSec ?: return
+        if (total > 0) {
+            startSleepTimerSeconds(total)
+        }
+    }
+
+    fun cancelSleepTimer() {
+        sleepTimerJob?.cancel()
+        sleepTimerJob = null
+        _state.update {
+            it.copy(
+                sleepTimerRemainingSec = null,
+                sleepTimerTotalSec = null,
+                sleepTimerAutoPausedNotice = false
+            )
+        }
+    }
+
+    fun clearSleepTimerNotice() {
+        _state.update { it.copy(sleepTimerAutoPausedNotice = false) }
     }
 
     fun setEqualizerEnabled(enabled: Boolean) {

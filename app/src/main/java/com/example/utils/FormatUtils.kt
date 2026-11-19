@@ -42,4 +42,16 @@ object FormatUtils {
         val secs = seconds % 60L
         return if (mins > 0L) "${mins}m ${secs}s" else "${secs}s"
     }
+
+    fun formatTimerSeconds(totalSeconds: Int): String {
+        val safe = totalSeconds.coerceAtLeast(0)
+        val hours = safe / 3600
+        val minutes = (safe % 3600) / 60
+        val seconds = safe % 60
+        return if (hours > 0) {
+            String.format(Locale.US, "%d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format(Locale.US, "%02d:%02d", minutes, seconds)
+        }
+    }
 }

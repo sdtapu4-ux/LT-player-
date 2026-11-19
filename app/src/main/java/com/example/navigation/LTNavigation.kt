@@ -69,6 +69,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.toRoute
 import com.example.data.model.CodecSupportReport
 import com.example.data.model.VideoItem
 import com.example.data.scanner.CodecInspector
@@ -90,6 +91,7 @@ import com.example.ui.screens.PremiumSubscriptionScreen
 import com.example.ui.screens.SearchScreen
 import com.example.ui.screens.SplashScreen
 import com.example.ui.screens.StorageManagementScreen
+import com.example.ui.screens.VideoEditorScreen
 import com.example.ui.screens.share.LtShareConnectedDeviceScreen
 import com.example.ui.screens.share.LtShareGenerateQrScreen
 import com.example.ui.screens.share.LtShareHubScreen
@@ -119,6 +121,7 @@ import kotlinx.serialization.Serializable
 @Serializable data object RouteStorage
 @Serializable data object RoutePremium
 @Serializable data object RoutePlaybackCompatibilitySettings
+@Serializable data class RouteVideoEditor(val initialVideoUri: String? = null)
 @Serializable data object RouteLtShare
 @Serializable data object RouteLtShareGenerateQr
 @Serializable data object RouteLtShareQrPreview
@@ -473,6 +476,9 @@ fun LTAppNavigation(
                                         Uri.parse(video.uriString),
                                         video.containerExtension
                                     )
+                                },
+                                onEditVideo = { video ->
+                                    navController.navigate(RouteVideoEditor(initialVideoUri = video.uriString))
                                 }
                             )
                         }
@@ -538,6 +544,9 @@ fun LTAppNavigation(
                                 onOpenCompatibility = {
                                     navController.navigate(RoutePlaybackCompatibilitySettings)
                                 },
+                                onOpenVideoEditor = {
+                                    navController.navigate(RouteVideoEditor(initialVideoUri = null))
+                                },
                                 onClearHistory = { viewModel.clearHistory() },
                                 onResetSettings = { viewModel.resetSettings() }
                             )
@@ -592,7 +601,30 @@ fun LTAppNavigation(
                                 },
                                 onOpenCompatibilitySettings = {
                                     navController.navigate(RoutePlaybackCompatibilitySettings)
+                                },
+                                onOpenVideoEditor = { uriStr ->
+                                    navController.navigate(RouteVideoEditor(initialVideoUri = uriStr))
                                 }
+                            )
+                        }
+
+                        composable<RouteVideoEditor> { backStackEntry ->
+                            val args = backStackEntry.toRoute<RouteVideoEditor>()
+                            VideoEditorScreen(
+                                initialVideoUri = args.initialVideoUri,
+                                videos = videos,
+                                audioTracks = audioTracks,
+                                subtitleEncoding = settings.subtitlePrefs.encoding,
+                                onExportSavedToGallery = {
+                                    viewModel.refreshAll()
+                                    viewModel.showMessage("Exported video saved to Gallery (Movies/LT PLAYER).")
+                                },
+                                onPlayExportedVideo = { uriStr ->
+                                    viewModel.openPickedVideoUri(Uri.parse(uriStr)) {
+                                        navController.navigate(RouteFullPlayer)
+                                    }
+                                },
+                                onBack = { navController.popBackStack() }
                             )
                         }
 

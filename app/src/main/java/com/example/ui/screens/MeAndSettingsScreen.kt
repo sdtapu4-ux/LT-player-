@@ -103,6 +103,7 @@ fun MeAndSettingsScreen(
     onOpenFolders: () -> Unit,
     onOpenLtShare: () -> Unit,
     onOpenCompatibility: () -> Unit,
+    onOpenVideoEditor: () -> Unit,
     onClearHistory: () -> Unit,
     onResetSettings: () -> Unit,
     modifier: Modifier = Modifier
@@ -216,6 +217,12 @@ fun MeAndSettingsScreen(
                     title = "LT SHARE (QR Pairing & P2P)",
                     subtitle = "Encrypted QR device pairing, Wi-Fi Direct, LAN & Bluetooth",
                     onClick = onOpenLtShare
+                )
+                SettingsActionRow(
+                    icon = Icons.Rounded.Edit,
+                    title = "Video Editor Studio",
+                    subtitle = "Trim, cut, split, merge, crop, filters & save to Gallery",
+                    onClick = onOpenVideoEditor
                 )
             }
         }

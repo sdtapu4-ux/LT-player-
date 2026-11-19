@@ -86,6 +86,7 @@ import com.example.data.model.RepeatModeOption
 import com.example.player.PlayerController
 import com.example.player.PlayerUiState
 import com.example.ui.components.EmptyMediaStateCard
+import com.example.ui.components.VideoTimerBottomSheet
 import com.example.ui.theme.ElectricGreen
 import com.example.ui.theme.PremiumBlue
 import com.example.utils.FormatUtils
@@ -549,34 +550,13 @@ fun MusicPlayerScreen(
     }
 
     if (showSleepTimerDialog) {
-        val options = listOf(0 to "Off", 15 to "15 minutes", 30 to "30 minutes", 45 to "45 minutes", 60 to "60 minutes")
-        AlertDialog(
-            onDismissRequest = { showSleepTimerDialog = false },
-            title = { Text("Sleep Timer") },
-            text = {
-                Column {
-                    options.forEach { (mins, label) ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    playerController.startSleepTimer(mins)
-                                    showSleepTimerDialog = false
-                                }
-                                .padding(vertical = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(label)
-                            if (mins > 0 && playerState.sleepTimerRemainingSec != null &&
-                                (playerState.sleepTimerRemainingSec / 60) in (mins - 1)..mins
-                            ) {
-                                Text("Active", color = ElectricGreen)
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { showSleepTimerDialog = false }) { Text("Close") } }
+        VideoTimerBottomSheet(
+            remainingSec = playerState.sleepTimerRemainingSec,
+            totalSec = playerState.sleepTimerTotalSec,
+            onStartMinutes = { mins -> playerController.startSleepTimer(mins) },
+            onResetTimer = { playerController.resetSleepTimer() },
+            onCancelTimer = { playerController.cancelSleepTimer() },
+            onDismiss = { showSleepTimerDialog = false }
         )
     }
 

@@ -45,6 +45,7 @@ import androidx.compose.material.icons.rounded.AutoMode
 import androidx.compose.material.icons.rounded.BrightnessHigh
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.Headphones
@@ -62,6 +63,7 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Subtitles
+import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -112,6 +114,7 @@ import com.example.data.model.SubtitlePreferences
 import com.example.data.scanner.SubtitleParser
 import com.example.player.PlayerController
 import com.example.player.PlayerUiState
+import com.example.ui.components.VideoTimerBottomSheet
 import com.example.ui.theme.AmberGold
 import com.example.ui.theme.CoralError
 import com.example.ui.theme.ElectricGreen
@@ -132,7 +135,8 @@ fun FullScreenPlayerScreen(
     onUpdateSubtitlePrefs: (SubtitlePreferences) -> Unit,
     onToggleBackgroundAudio: (Boolean) -> Unit,
     onPersistCompatibility: (PlaybackEnginePreference?, DecoderPreference?, Long?, Int?) -> Unit,
-    onOpenCompatibilitySettings: () -> Unit
+    onOpenCompatibilitySettings: () -> Unit,
+    onOpenVideoEditor: (String?) -> Unit
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -145,6 +149,7 @@ fun FullScreenPlayerScreen(
     var showAudioTrackSheet by remember { mutableStateOf(false) }
     var showQueueSheet by remember { mutableStateOf(false) }
     var showEngineSheet by remember { mutableStateOf(false) }
+    var showTimerSheet by remember { mutableStateOf(false) }
     var isLandscape by remember { mutableStateOf(false) }
     var zoomScale by remember { mutableFloatStateOf(1f) }
     var gestureHudText by remember { mutableStateOf<String?>(null) }
@@ -458,6 +463,79 @@ fun FullScreenPlayerScreen(
             }
         }
 
+        // Persistent Sleep Timer Countdown Badge when HUD is hidden
+        if (playerState.sleepTimerRemainingSec != null && (!controlsVisible || isLocked) && playerState.playbackError == null) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = Color.Black.copy(alpha = 0.72f),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(top = 14.dp, end = 14.dp)
+                    .clickable { showTimerSheet = true }
+                    .testTag("player_timer_floating_badge")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Icon(
+                        Icons.Rounded.Timer,
+                        contentDescription = "Sleep Timer",
+                        tint = ElectricGreen,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Text(
+                        text = FormatUtils.formatTimerSeconds(playerState.sleepTimerRemainingSec),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = ElectricGreen,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        // Sleep Timer Auto-Paused Notice
+        if (playerState.sleepTimerAutoPausedNotice && playerState.playbackError == null) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = Color.Black.copy(alpha = 0.85f),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 64.dp, start = 20.dp, end = 20.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(Icons.Rounded.Timer, contentDescription = null, tint = ElectricGreen, modifier = Modifier.size(16.dp))
+                    Text(
+                        text = "Sleep timer ended • Video auto-paused",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    TextButton(
+                        onClick = {
+                            playerController.clearSleepTimerNotice()
+                            playerController.togglePlayPause()
+                        }
+                    ) {
+                        Text("Resume", color = ElectricGreen)
+                    }
+                    IconButton(
+                        onClick = { playerController.clearSleepTimerNotice() },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Dismiss", tint = Color.White, modifier = Modifier.size(14.dp))
+                    }
+                }
+            }
+        }
+
         // Diagnostic Playback Error & Recovery Card
         if (playerState.playbackError != null) {
             val diag = playerState.diagnosticReport
@@ -667,6 +745,19 @@ fun FullScreenPlayerScreen(
                         }
                     }
                     IconButton(
+                        onClick = {
+                            playerController.pause()
+                            onOpenVideoEditor(playerState.currentEntry?.uriString)
+                        },
+                        modifier = Modifier.testTag("player_edit_video_button")
+                    ) {
+                        Icon(
+                            Icons.Rounded.Edit,
+                            contentDescription = "Edit Video",
+                            tint = Color.White
+                        )
+                    }
+                    IconButton(
                         onClick = { onToggleBackgroundAudio(!settings.backgroundAudioEnabled) },
                         modifier = Modifier.testTag("player_bg_audio_button")
                     ) {
@@ -802,13 +893,20 @@ fun FullScreenPlayerScreen(
                         )
                         PlayerActionChip(
                             icon = Icons.Rounded.Subtitles,
-                            label = "Subtitles",
+                            label = "Subs",
                             onClick = { showSubtitleSheet = true }
                         )
                         PlayerActionChip(
                             icon = Icons.Rounded.Audiotrack,
                             label = "Audio",
                             onClick = { showAudioTrackSheet = true }
+                        )
+                        PlayerActionChip(
+                            icon = Icons.Rounded.Timer,
+                            label = playerState.sleepTimerRemainingSec?.let { FormatUtils.formatTimerSeconds(it) } ?: "Timer",
+                            isHighlighted = playerState.sleepTimerRemainingSec != null,
+                            onClick = { showTimerSheet = true },
+                            modifier = Modifier.testTag("player_timer_button")
                         )
                         PlayerActionChip(
                             icon = Icons.AutoMirrored.Rounded.QueueMusic,
@@ -1073,23 +1171,37 @@ fun FullScreenPlayerScreen(
             }
         }
     }
+
+    if (showTimerSheet) {
+        VideoTimerBottomSheet(
+            remainingSec = playerState.sleepTimerRemainingSec,
+            totalSec = playerState.sleepTimerTotalSec,
+            onStartMinutes = { mins -> playerController.startSleepTimer(mins) },
+            onResetTimer = { playerController.resetSleepTimer() },
+            onCancelTimer = { playerController.cancelSleepTimer() },
+            onDismiss = { showTimerSheet = false }
+        )
+    }
 }
 
 @Composable
 private fun PlayerActionChip(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    isHighlighted: Boolean = false,
+    modifier: Modifier = Modifier
 ) {
+    val tint = if (isHighlighted) ElectricGreen else Color.White
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
+        modifier = modifier
             .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .padding(horizontal = 6.dp, vertical = 6.dp)
     ) {
-        Icon(icon, contentDescription = label, tint = Color.White, modifier = Modifier.size(20.dp))
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
         Spacer(Modifier.height(2.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall, color = Color.White)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = tint, maxLines = 1)
     }
 }
