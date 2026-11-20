@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.annotation.OptIn
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -46,6 +47,8 @@ class PlaybackService : MediaSessionService() {
         const val CHANNEL_SLEEP_TIMER = "lt_sleep_timer"
         const val NOTIF_ID_SLEEP_TIMER = 4401
         const val ACTION_CANCEL_SLEEP_TIMER = "com.example.action.CANCEL_SLEEP_TIMER"
+        const val ACTION_STOP_FOR_SLEEP_TIMER = "com.example.action.STOP_FOR_SLEEP_TIMER"
+        const val EXTRA_SLEEP_END_STOP = "extra_sleep_end_stop"
 
         @Volatile
         var onCancelSleepTimerFromNotification: (() -> Unit)? = null
@@ -155,12 +158,37 @@ class PlaybackService : MediaSessionService() {
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             runCatching { nm.cancel(NOTIF_ID_SLEEP_TIMER) }
         }
+
+        fun stopForegroundMediaServiceForSleepTimer(context: Context, stopPlaybackToo: Boolean) {
+            val intent = Intent(context, PlaybackService::class.java).apply {
+                action = ACTION_STOP_FOR_SLEEP_TIMER
+                putExtra(EXTRA_SLEEP_END_STOP, stopPlaybackToo)
+            }
+            runCatching { context.startService(intent) }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_CANCEL_SLEEP_TIMER) {
-            onCancelSleepTimerFromNotification?.invoke()
-            cancelSleepTimerNotification(this)
+        when (intent?.action) {
+            ACTION_CANCEL_SLEEP_TIMER -> {
+                onCancelSleepTimerFromNotification?.invoke()
+                cancelSleepTimerNotification(this)
+            }
+            ACTION_STOP_FOR_SLEEP_TIMER -> {
+                val stopToo = intent.getBooleanExtra(EXTRA_SLEEP_END_STOP, false)
+                mediaSession?.player?.let { player ->
+                    player.pause()
+                    if (stopToo) {
+                        player.stop()
+                        player.seekTo(0L)
+                    }
+                }
+                runCatching {
+                    ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                }
+                stopSelf()
+                return START_NOT_STICKY
+            }
         }
         return super.onStartCommand(intent, flags, startId)
     }

@@ -372,7 +372,7 @@ fun HomeVideoDashboardScreen(
                                     .clickable(onClick = onOpenPlaylists)
                             ) {
                                 Column(modifier = Modifier.padding(12.dp)) {
-                                    Icon(Icons.Rounded.PlaylistPlay, contentDescription = null, tint = ElectricGreen)
+                                    Icon(Icons.AutoMirrored.Rounded.PlaylistPlay, contentDescription = null, tint = ElectricGreen)
                                     Spacer(Modifier.height(6.dp))
                                     Text(pl.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     Text(

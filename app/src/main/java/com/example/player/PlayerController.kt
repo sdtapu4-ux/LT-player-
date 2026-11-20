@@ -5,6 +5,9 @@ import android.content.Context
 import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
 import android.net.Uri
+import android.os.CountDownTimer
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.media3.common.C
@@ -122,7 +125,8 @@ class PlayerController(
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
     private var progressJob: Job? = null
-    private var sleepTimerJob: Job? = null
+    private var sleepCountDownTimer: CountDownTimer? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var equalizer: Equalizer? = null
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private var pendingAction: (() -> Unit)? = null
@@ -311,21 +315,34 @@ class PlayerController(
     }
 
     fun connect() {
-        if (controller != null || controllerFuture != null) return
+        if (controller?.isConnected == true || controllerFuture != null) return
         val sessionToken = SessionToken(context, ComponentName(context, PlaybackService::class.java))
-        val future = MediaController.Builder(context, sessionToken).buildAsync()
+        val future = MediaController.Builder(context, sessionToken)
+            .setListener(object : MediaController.Listener {
+                override fun onDisconnected(mc: MediaController) {
+                    if (controller === mc) {
+                        controller = null
+                        controllerFuture = null
+                        _state.update { it.copy(isConnected = false, isPlaying = false) }
+                    }
+                }
+            })
+            .buildAsync()
         controllerFuture = future
         future.addListener(
             {
                 runCatching {
                     val mc = future.get()
                     controller = mc
+                    controllerFuture = null
                     mc.addListener(playerListener)
                     _state.update { it.copy(isConnected = true) }
                     applyPreferredAudioLanguageToMedia3(_state.value.preferredAudioLanguage)
                     pendingAction?.invoke()
                     pendingAction = null
                     startProgressLoop()
+                }.onFailure {
+                    controllerFuture = null
                 }
             },
             MoreExecutors.directExecutor()
@@ -628,7 +645,7 @@ class PlayerController(
                     }
                     startProgressLoop()
                 }
-                if (controller != null) loadAction() else {
+                if (controller?.isConnected == true) loadAction() else {
                     pendingAction = { loadAction() }
                     connect()
                 }
@@ -835,10 +852,14 @@ class PlayerController(
             return
         }
         val mc = controller
-        if (mc != null) {
+        if (mc != null && mc.isConnected) {
             if (mc.isPlaying) mc.pause() else mc.play()
         } else if (_state.value.currentEntry != null) {
-            pendingAction = { controller?.play() }
+            val resumeEntry = _state.value.currentEntry!!
+            val resumePos = _state.value.currentPositionMs
+            pendingAction = {
+                launchEntryOnEngine(ActivePlaybackEngine.MEDIA3, resumeEntry, resumePos)
+            }
             connect()
         }
     }
@@ -1132,13 +1153,13 @@ class PlayerController(
     }
 
     fun startSleepTimerSeconds(totalSeconds: Int) {
-        sleepTimerJob?.cancel()
+        cancelSleepTimerInternal(clearNotice = false)
         if (totalSeconds <= 0) {
             cancelSleepTimer()
             return
         }
         val clampedSec = totalSeconds.coerceIn(1, 720 * 60)
-        val endAtElapsedMs = SystemClock.elapsedRealtime() + clampedSec * 1000L
+        val durationMs = clampedSec * 1000L
         _state.update {
             it.copy(
                 sleepTimerTotalSec = clampedSec,
@@ -1151,35 +1172,55 @@ class PlayerController(
             remainingSec = clampedSec,
             actionLabel = _state.value.sleepTimerEndAction.label
         )
-        sleepTimerJob = scope.launch {
-            while (isActive) {
-                val msLeft = endAtElapsedMs - SystemClock.elapsedRealtime()
-                val secLeft = ((msLeft + 999L) / 1000L).toInt().coerceAtLeast(0)
-                if (secLeft <= 0) break
-                _state.update { it.copy(sleepTimerRemainingSec = secLeft) }
-                PlaybackService.postSleepTimerNotification(
-                    context = context,
-                    remainingSec = secLeft,
-                    actionLabel = _state.value.sleepTimerEndAction.label
-                )
-                delay(1000L)
-            }
-            if (isActive) {
-                val chosenAction = _state.value.sleepTimerEndAction
-                when (chosenAction) {
-                    SleepTimerEndAction.AUTO_PAUSE -> pause()
-                    SleepTimerEndAction.STOP_PLAYBACK -> stopPlayback()
-                }
-                PlaybackService.postSleepTimerFinishedNotification(context, chosenAction.label)
-                _state.update {
-                    it.copy(
-                        sleepTimerRemainingSec = null,
-                        sleepTimerTotalSec = null,
-                        sleepTimerLastEndAction = chosenAction,
-                        sleepTimerAutoPausedNotice = true
+        val startTimerRunnable = Runnable {
+            sleepCountDownTimer?.cancel()
+            sleepCountDownTimer = object : CountDownTimer(durationMs, 1000L) {
+                override fun onTick(millisUntilFinished: Long) {
+                    val secLeft = ((millisUntilFinished + 999L) / 1000L).toInt().coerceAtLeast(1)
+                    _state.update { it.copy(sleepTimerRemainingSec = secLeft) }
+                    PlaybackService.postSleepTimerNotification(
+                        context = context,
+                        remainingSec = secLeft,
+                        actionLabel = _state.value.sleepTimerEndAction.label
                     )
                 }
-            }
+
+                override fun onFinish() {
+                    sleepCountDownTimer = null
+                    val chosenAction = _state.value.sleepTimerEndAction
+                    when (chosenAction) {
+                        SleepTimerEndAction.AUTO_PAUSE -> {
+                            pause()
+                            PlaybackService.stopForegroundMediaServiceForSleepTimer(
+                                context = context,
+                                stopPlaybackToo = false
+                            )
+                        }
+                        SleepTimerEndAction.STOP_PLAYBACK -> {
+                            stopPlayback()
+                            PlaybackService.stopForegroundMediaServiceForSleepTimer(
+                                context = context,
+                                stopPlaybackToo = true
+                            )
+                        }
+                    }
+                    PlaybackService.postSleepTimerFinishedNotification(context, chosenAction.label)
+                    _state.update {
+                        it.copy(
+                            isPlaying = false,
+                            sleepTimerRemainingSec = null,
+                            sleepTimerTotalSec = null,
+                            sleepTimerLastEndAction = chosenAction,
+                            sleepTimerAutoPausedNotice = true
+                        )
+                    }
+                }
+            }.start()
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            startTimerRunnable.run()
+        } else {
+            mainHandler.post(startTimerRunnable)
         }
     }
 
@@ -1191,15 +1232,28 @@ class PlayerController(
     }
 
     fun cancelSleepTimer() {
-        sleepTimerJob?.cancel()
-        sleepTimerJob = null
-        PlaybackService.cancelSleepTimerNotification(context)
-        _state.update {
-            it.copy(
-                sleepTimerRemainingSec = null,
-                sleepTimerTotalSec = null,
-                sleepTimerAutoPausedNotice = false
-            )
+        cancelSleepTimerInternal(clearNotice = true)
+    }
+
+    private fun cancelSleepTimerInternal(clearNotice: Boolean) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            sleepCountDownTimer?.cancel()
+            sleepCountDownTimer = null
+        } else {
+            mainHandler.post {
+                sleepCountDownTimer?.cancel()
+                sleepCountDownTimer = null
+            }
+        }
+        if (clearNotice) {
+            PlaybackService.cancelSleepTimerNotification(context)
+            _state.update {
+                it.copy(
+                    sleepTimerRemainingSec = null,
+                    sleepTimerTotalSec = null,
+                    sleepTimerAutoPausedNotice = false
+                )
+            }
         }
     }
 
@@ -1326,7 +1380,8 @@ class PlayerController(
     fun release() {
         persistCurrentPosition()
         progressJob?.cancel()
-        sleepTimerJob?.cancel()
+        sleepCountDownTimer?.cancel()
+        sleepCountDownTimer = null
         runCatching { loudnessEnhancer?.release() }
         loudnessEnhancer = null
         runCatching { equalizer?.release() }
