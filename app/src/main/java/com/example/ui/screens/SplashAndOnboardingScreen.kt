@@ -44,13 +44,19 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.ui.components.LTLogoMark
 import com.example.ui.theme.DeepBlack
 import com.example.ui.theme.ElectricGreen
 import com.example.ui.theme.PremiumBlue
+import com.example.ui.theme.SpaceGroteskFontFamily
+import com.example.ui.theme.TextPrimaryDark
+import com.example.ui.theme.TextSecondaryDark
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -58,10 +64,15 @@ import kotlinx.coroutines.launch
 fun SplashScreen(onFinished: () -> Unit) {
     val scale = remember { Animatable(0.72f) }
     val alpha = remember { Animatable(0f) }
+    val creditAlpha = remember { Animatable(0f) }
 
     LaunchedEffect(Unit) {
         launch { scale.animateTo(1f, animationSpec = tween(550, easing = FastOutSlowInEasing)) }
         launch { alpha.animateTo(1f, animationSpec = tween(480)) }
+        launch {
+            delay(200L)
+            creditAlpha.animateTo(1f, animationSpec = tween(600, easing = FastOutSlowInEasing))
+        }
         delay(1050L)
         onFinished()
     }
@@ -103,6 +114,36 @@ fun SplashScreen(onFinished: () -> Unit) {
                 text = "ULTIMATE PREMIUM MEDIA ENGINE",
                 style = MaterialTheme.typography.labelLarge,
                 color = PremiumBlue
+            )
+        }
+
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = 32.dp)
+                .alpha(creditAlpha.value)
+                .testTag("splash_creator_credit")
+        ) {
+            Text(
+                text = stringResource(R.string.splash_created_by),
+                style = MaterialTheme.typography.labelSmall.copy(
+                    letterSpacing = 1.6.sp
+                ),
+                color = TextSecondaryDark,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(3.dp))
+            Text(
+                text = stringResource(R.string.splash_creator_name),
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontFamily = SpaceGroteskFontFamily,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 0.8.sp
+                ),
+                color = TextPrimaryDark.copy(alpha = 0.92f),
+                textAlign = TextAlign.Center
             )
         }
     }

@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.app.Activity
+import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.pm.ActivityInfo
 import android.media.AudioManager
@@ -775,7 +776,11 @@ fun FullScreenPlayerScreen(
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         IconButton(
                             onClick = {
-                                runCatching { activity?.enterPictureInPictureMode() }
+                                runCatching {
+                                    activity?.enterPictureInPictureMode(
+                                        PictureInPictureParams.Builder().build()
+                                    )
+                                }
                             },
                             modifier = Modifier.testTag("player_pip_button")
                         ) {

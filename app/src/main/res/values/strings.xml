@@ -2,6 +2,8 @@
     <string name="app_name">LT PLAYER</string>
     <string name="app_short_name">LT</string>
     <string name="tagline">ULTIMATE MEDIA ENGINE</string>
+    <string name="splash_created_by">Created by</string>
+    <string name="splash_creator_name">LT Tapu Sutradhar</string>
     <string name="nav_video">VIDEO</string>
     <string name="nav_music">MUSIC</string>
     <string name="nav_ai_video">AI VIDEO</string>

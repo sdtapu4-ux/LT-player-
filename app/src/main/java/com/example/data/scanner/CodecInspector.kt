@@ -283,8 +283,8 @@ object CodecInspector {
 
             val issues = buildList {
                 if (isDrm) add("DRM-encrypted stream detected")
-                if (!videoOk && videoMime != null) add("No MediaCodec decoder for $videoMime (LibVLC fallback ready)")
-                if (!audioOk && audioMime != null) add("No MediaCodec decoder for $audioMime (LibVLC fallback ready)")
+                if (!videoOk) add("No MediaCodec decoder for $videoMime (LibVLC fallback ready)")
+                if (!audioOk) add("No MediaCodec decoder for $audioMime (LibVLC fallback ready)")
             }
 
             val msg = if (issues.isEmpty()) {

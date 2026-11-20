@@ -700,7 +700,8 @@ fun LtShareTransferSuccessScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(shareState.transferItems, key = { it.fileIndex }) { item ->
-                    val isPlayable = item.savedUriString != null &&
+                    val savedUri = item.savedUriString
+                    val isPlayable = savedUri != null &&
                         (item.mimeType.startsWith("video/") || item.mimeType.startsWith("audio/"))
                     Surface(
                         shape = RoundedCornerShape(14.dp),
@@ -720,8 +721,8 @@ fun LtShareTransferSuccessScreen(
                                     color = if (item.verified) ElectricGreen else AmberGold
                                 )
                             }
-                            if (isPlayable && item.savedUriString != null) {
-                                IconButton(onClick = { onPlayMediaUri(item.savedUriString) }) {
+                            if (isPlayable) {
+                                IconButton(onClick = { onPlayMediaUri(savedUri) }) {
                                     Icon(Icons.Rounded.PlayArrow, contentDescription = "Play in LT PLAYER", tint = ElectricGreen)
                                 }
                             }
