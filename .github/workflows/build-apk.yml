@@ -59,8 +59,45 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
-      - name: Run unit & Robolectric tests and build Debug APK
-        run: gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --console=plain
+      - name: Cache Robolectric SDK artifacts
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-sdk36-16-robolectric-13921718-i7
+
+      - name: Pre-fetch Robolectric SDK 36 (with retries & mirrors)
+        run: |
+          VER="16-robolectric-13921718-i7"
+          REL="org/robolectric/android-all-instrumented/${VER}"
+          DEST="$HOME/.m2/repository/${REL}"
+          mkdir -p "$DEST"
+          for FILE in \
+            "android-all-instrumented-${VER}.pom" \
+            "android-all-instrumented-${VER}.pom.sha512" \
+            "android-all-instrumented-${VER}.jar" \
+            "android-all-instrumented-${VER}.jar.sha512"; do
+            if [ ! -s "${DEST}/${FILE}" ]; then
+              rm -f "${DEST}/${FILE}.tmp"
+              OK=0
+              for BASE in \
+                "https://repo1.maven.org/maven2" \
+                "https://repo.maven.apache.org/maven2" \
+                "https://maven-central.storage-download.googleapis.com/maven2"; do
+                if curl -fSL --retry 4 --retry-delay 3 --retry-all-errors "${BASE}/${REL}/${FILE}" -o "${DEST}/${FILE}.tmp"; then
+                  mv "${DEST}/${FILE}.tmp" "${DEST}/${FILE}"
+                  OK=1
+                  break
+                fi
+                rm -f "${DEST}/${FILE}.tmp"
+              done
+              if [ "$OK" -ne 1 ]; then
+                echo "Warning: could not pre-fetch ${FILE}; Robolectric will attempt direct fetch."
+              fi
+            fi
+          done
+
+      - name: Build Debug APK
+        run: gradle :app:assembleDebug --no-daemon --console=plain
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
@@ -68,6 +105,9 @@ jobs:
           name: LT-PLAYER-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: Run unit & Robolectric tests
+        run: gradle :app:testDebugUnitTest --no-daemon --console=plain
 
       - name: Build Release APK & AAB (when signing secrets are configured)
         id: release_build
