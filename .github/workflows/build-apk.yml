@@ -99,6 +99,16 @@ jobs:
       - name: Build Debug APK
         run: gradle :app:assembleDebug --no-daemon --console=plain
 
+      - name: Verify Debug APK integrity & signature
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          BT="$(ls -d "$SDK_ROOT"/build-tools/* | sort -V | tail -n 1)"
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          ls -lh "$APK"
+          "$BT/zipalign" -c -v 4 "$APK" | tail -n 5
+          "$BT/apksigner" verify --verbose --print-certs "$APK"
+          "$BT/aapt" dump badging "$APK" | grep -E "package:|sdkVersion|targetSdkVersion|native-code|launchable-activity"
+
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:

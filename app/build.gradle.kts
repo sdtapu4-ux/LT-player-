@@ -21,6 +21,17 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    val requestedAbis = providers.gradleProperty("ltplayer.abiFilters").orNull
+    ndk {
+      val abis = requestedAbis
+        ?.split(",")
+        ?.map { it.trim() }
+        ?.filter { it.isNotEmpty() }
+        ?.takeIf { it.isNotEmpty() }
+        ?: listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+      abiFilters += abis
+    }
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
@@ -68,6 +79,20 @@ android {
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
+  }
+  packaging {
+    jniLibs {
+      useLegacyPackaging = true
+    }
+    resources {
+      excludes += setOf(
+        "META-INF/AL2.0",
+        "META-INF/LGPL2.1",
+        "META-INF/LICENSE*",
+        "META-INF/NOTICE*",
+        "META-INF/DEPENDENCIES"
+      )
+    }
   }
 }
 
