@@ -105,6 +105,8 @@ jobs:
           BT="$(ls -d "$SDK_ROOT"/build-tools/* | sort -V | tail -n 1)"
           APK="app/build/outputs/apk/debug/app-debug.apk"
           ls -lh "$APK"
+          sha256sum "$APK"
+          unzip -tq "$APK"
           "$BT/zipalign" -c -v 4 "$APK" | tail -n 5
           "$BT/apksigner" verify --verbose --print-certs "$APK"
           "$BT/aapt" dump badging "$APK" | grep -E "package:|sdkVersion|targetSdkVersion|native-code|launchable-activity"
